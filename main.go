@@ -7,6 +7,7 @@ import (
 	"partui/par2"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -14,19 +15,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Entry is a file or subdirecory in a current directory
-type Entry struct {
-	name  string
-	size  int64
-	isDir bool
-}
-
 type model struct {
-	currentDir      string
-	entries         []Entry
-	filenameMaxSize int
-	fileList        list.Model
-	archived        []string
+	currentDir string
+	fileList   list.Model
+	archived   []string
 
 	mainWindow struct {
 		width  int
@@ -74,6 +66,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			item.archive = true
 			m.fileList.SetItem(m.fileList.Index(), item)
 			m.fileList.CursorDown()
+		case "v":
+			item := m.fileList.SelectedItem().(fileItem)
+			verifyParFiles(m, item)
 		case "enter":
 			item := m.fileList.SelectedItem().(fileItem)
 			if item.isDir {
@@ -99,6 +94,15 @@ func createParFiles(m model, item fileItem) {
 	printShowStopper(err)
 }
 
+func verifyParFiles(m model, item fileItem) {
+	name := strings.TrimRight(item.title, " \t\r\n")
+	cmd := exec.Command("par2", "v", name)
+	cmd.Dir = m.currentDir
+	output, err := cmd.CombinedOutput()
+	fmt.Println(string(output))
+	printShowStopper(err)
+}
+
 func (m model) View() string {
 	style := lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("63"))
 
@@ -110,15 +114,17 @@ func (m model) View() string {
 func buildModelForDirectory(m *model, dir string) error {
 	m.currentDir = dir
 
-	// unless root directory, add .. to a list of directories
-	parent := filepath.Dir(dir)
-	if dir != parent {
-		m.entries = []Entry{{name: "..", isDir: true, size: 0}}
-	}
-
 	osFiles, err := os.ReadDir(dir)
 	if err != nil {
 		return err
+	}
+
+	items := make([]list.Item, 0, len(osFiles)+1)
+
+	// unless root directory, add .. to a list of directories
+	parent := filepath.Dir(dir)
+	if dir != parent {
+		items = append(items, fileItem{title: "../", isDir: true, desc: "Parent directory"})
 	}
 
 	for _, file := range osFiles {
@@ -136,14 +142,36 @@ func buildModelForDirectory(m *model, dir string) error {
 			m.archived = append(m.archived, archived...)
 		}
 
-		if m.filenameMaxSize < len(file.Name()) {
-			m.filenameMaxSize = len(file.Name())
+		label := file.Name()
+
+		if file.IsDir() {
+			label = label + "/"
 		}
 
-		m.entries = append(m.entries, Entry{name: file.Name(), isDir: file.IsDir(), size: fileInfo.Size()})
-	}
+		items = append(items, fileItem{
+			title:   label,
+			archive: slices.Contains(m.archived, file.Name()),
+			desc:    fmt.Sprintf("%d bytes", fileInfo.Size()),
+			isDir:   file.IsDir(),
+		})
 
-	m.fileList = buildList(m)
+		m.fileList = list.New(items, newItemDelegate(), 0, 0)
+		w := m.mainWindow.width - 2
+		if w < 0 {
+			w = 0
+		}
+		h := m.mainWindow.height - 6
+		if h < 0 {
+			h = 0
+		}
+		m.fileList.SetWidth(w)
+		m.fileList.SetHeight(h)
+		m.fileList.Title = m.currentDir
+		m.fileList.SetShowHelp(false)
+		m.fileList.SetFilterState(list.Unfiltered)
+		m.fileList.SetShowPagination(true)
+		m.fileList.DisableQuitKeybindings()
+	}
 
 	return nil
 }

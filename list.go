@@ -1,9 +1,7 @@
 package main
 
 import (
-	"fmt"
 	"io"
-	"slices"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -52,7 +50,12 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		return
 	}
 
-	content := it.title + " " + it.desc
+	spacer_len := m.Width() - len(it.title) - len(it.desc) - 4
+	if spacer_len <= 0 {
+		spacer_len = 1
+	}
+	spacer := strings.Repeat(" ", spacer_len)
+	content := it.title + spacer + it.desc
 
 	if index == m.Index() {
 		style = d.selected
@@ -80,46 +83,4 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		style = style.Foreground(lipgloss.Color("27")).Bold(true)
 	}
 	io.WriteString(w, style.Render(content))
-}
-
-func buildList(m *model) list.Model {
-	items := make([]list.Item, 0, len(m.entries))
-	// todo: refactor string concatenation with strings.Builder
-	for _, e := range m.entries {
-		label := e.name
-
-		if e.isDir {
-			label = label + "/"
-		}
-
-		// cosmetic: append spaces to short filenames
-		if m.filenameMaxSize > len(label) {
-			label = label + strings.Repeat(" ", m.filenameMaxSize-len(label))
-		}
-
-		items = append(items, fileItem{
-			title:   label,
-			archive: slices.Contains(m.archived, e.name),
-			desc:    fmt.Sprintf("%d bytes", e.size),
-			isDir:   e.isDir,
-		})
-	}
-
-	l := list.New(items, newItemDelegate(), 0, 0)
-	w := m.mainWindow.width - 2
-	h := m.mainWindow.height - 6
-	if w < 0 {
-		w = 0
-	}
-	if h < 0 {
-		h = 0
-	}
-	l.SetWidth(w)
-	l.SetHeight(h)
-	l.Title = m.currentDir
-	l.SetShowHelp(false)
-	l.SetFilterState(list.Unfiltered)
-	l.SetShowPagination(false)
-	l.DisableQuitKeybindings()
-	return l
 }
