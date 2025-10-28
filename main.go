@@ -37,14 +37,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mainWindow.height = msg.Height
 		// size list to fit inside the bordered box from View()
 		w := m.mainWindow.width - 2
-		h := m.mainWindow.height - 6
 		if w < 0 {
 			w = 0
 		}
+		m.fileList.SetWidth(w)
+
+		h := m.mainWindow.height - 6
 		if h < 0 {
 			h = 0
 		}
-		m.fileList.SetWidth(w)
 		m.fileList.SetHeight(h)
 		var cmd tea.Cmd
 		m.fileList, cmd = m.fileList.Update(msg)
@@ -69,6 +70,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "v":
 			item := m.fileList.SelectedItem().(fileItem)
 			verifyParFiles(m, item)
+			m.fileList.CursorDown()
 		case "enter":
 			item := m.fileList.SelectedItem().(fileItem)
 			if item.isDir {
@@ -86,8 +88,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func createParFiles(m model, item fileItem) {
-	name := strings.TrimRight(item.title, " \t\r\n")
-	cmd := exec.Command("par2", "c", name)
+	cmd := exec.Command("par2", "c", item.title)
 	cmd.Dir = m.currentDir
 	_, err := cmd.CombinedOutput()
 	// todo: check output and handle errors
@@ -95,12 +96,19 @@ func createParFiles(m model, item fileItem) {
 }
 
 func verifyParFiles(m model, item fileItem) {
-	name := strings.TrimRight(item.title, " \t\r\n")
-	cmd := exec.Command("par2", "v", name)
+	cmd := exec.Command("par2", "v", item.title)
 	cmd.Dir = m.currentDir
 	output, err := cmd.CombinedOutput()
-	fmt.Println(string(output))
-	printShowStopper(err)
+	if err != nil && err.Error() == "exit status 1" {
+		// parse and show per-file repair necessity
+		results := parsePar2VerifyLog(string(output))
+		for _, needs := range results {
+			if needs {
+				item.damaged = true
+				m.fileList.SetItem(m.fileList.Index(), item)
+			}
+		}
+	}
 }
 
 func (m model) View() string {
@@ -127,51 +135,47 @@ func buildModelForDirectory(m *model, dir string) error {
 		items = append(items, fileItem{title: "../", isDir: true, desc: "Parent directory"})
 	}
 
+	// populate information about already archived files first
+	processIndexFiles(m, osFiles)
+
+	// build a list of files and directories to display
 	for _, file := range osFiles {
+		name := file.Name()
+
 		fileInfo, err := file.Info()
-		if err != nil {
-			return err
+		if err != nil || hiddenFile(name) {
+			continue
 		}
 
-		if isParIndex(file.Name()) {
-			archived, err := par2.ListPar2Filenames(m.currentDir + "/" + file.Name())
-			if err != nil {
-				// todo: non show stopper error
-				return err
-			}
-			m.archived = append(m.archived, archived...)
-		}
-
-		label := file.Name()
-
+		title := name
 		if file.IsDir() {
-			label = label + "/"
+			title = title + "/"
 		}
 
 		items = append(items, fileItem{
-			title:   label,
-			archive: slices.Contains(m.archived, file.Name()),
+			title:   title,
+			archive: slices.Contains(m.archived, name),
 			desc:    fmt.Sprintf("%d bytes", fileInfo.Size()),
 			isDir:   file.IsDir(),
 		})
-
-		m.fileList = list.New(items, newItemDelegate(), 0, 0)
-		w := m.mainWindow.width - 2
-		if w < 0 {
-			w = 0
-		}
-		h := m.mainWindow.height - 6
-		if h < 0 {
-			h = 0
-		}
-		m.fileList.SetWidth(w)
-		m.fileList.SetHeight(h)
-		m.fileList.Title = m.currentDir
-		m.fileList.SetShowHelp(false)
-		m.fileList.SetFilterState(list.Unfiltered)
-		m.fileList.SetShowPagination(true)
-		m.fileList.DisableQuitKeybindings()
 	}
+
+	m.fileList = list.New(items, newItemDelegate(), 0, 0)
+	w := m.mainWindow.width - 2
+	if w < 0 {
+		w = 0
+	}
+	h := m.mainWindow.height - 6
+	if h < 0 {
+		h = 0
+	}
+	m.fileList.SetWidth(w)
+	m.fileList.SetHeight(h)
+	m.fileList.Title = m.currentDir
+	m.fileList.SetShowHelp(false)
+	m.fileList.SetFilterState(list.Unfiltered)
+	m.fileList.SetShowPagination(true)
+	m.fileList.DisableQuitKeybindings()
 
 	return nil
 }
@@ -185,6 +189,67 @@ func isParIndex(filename string) bool {
 	// Detect volume files: name.vol<digits>+<digits>.par2
 	var volPattern = regexp.MustCompile(`\.vol\d+\+\d+\.par2$`)
 	return !volPattern.MatchString(lf)
+}
+
+func hiddenFile(name string) bool {
+	// ignore hidden files and .par2 files
+	return strings.HasPrefix(name, ".") || filepath.Ext(name) == ".par2"
+}
+
+func processIndexFiles(m *model, files []os.DirEntry) {
+	for _, file := range files {
+		name := file.Name()
+		if isParIndex(name) {
+			archived, err := par2.ListPar2Filenames(m.currentDir + "/" + name)
+			if err != nil {
+				// todo: error handling
+				continue
+			}
+			m.archived = append(m.archived, archived...)
+		}
+	}
+}
+
+// parsePar2VerifyLog parses the output of `par2 v` and returns a map of
+// filename to a boolean indicating whether repair is needed for that file.
+// It recognizes lines in the form:
+//
+//	Target: "<name>" - ok.
+//	Target: "<name>" - damaged. Found X of Y data blocks.
+//
+// Files marked as "damaged", "missing" or "corrupt"
+// will be treated as needing repair.
+func parsePar2VerifyLog(log string) map[string]bool {
+	results := make(map[string]bool)
+
+	// Match: Target: "<file>" - <status>
+	// Example: Target: "main.go" - damaged. Found 1270 of 1307 data blocks.
+	targetRe := regexp.MustCompile(`(?m)^.*Target:\s+"(.+)"\s+-\s+(.+).*$`)
+
+	matches := targetRe.FindAllStringSubmatch(log, -1)
+	for _, m := range matches {
+		if len(m) < 3 {
+			continue
+		}
+		name := m[1]
+		status := strings.ToLower(m[2])
+
+		needsRepair := false
+		switch {
+		case strings.Contains(status, "ok"):
+			needsRepair = false
+		case strings.Contains(status, "damaged"):
+			needsRepair = true
+		case strings.Contains(status, "missing"):
+			needsRepair = true
+		case strings.Contains(status, "corrupt"):
+			needsRepair = true
+		}
+
+		results[name] = needsRepair
+	}
+
+	return results
 }
 
 func main() {

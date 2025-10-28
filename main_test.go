@@ -67,3 +67,23 @@ func TestIsParIndex(t *testing.T) {
 		})
 	}
 }
+
+func TestParsePar2VerifyLog(t *testing.T) {
+	log := `Loading "main.go.par2".
+Loaded 4 new packets   Loading: 0.3%
+
+Verifying source files:
+
+Opening: "main.go"
+Target: "main.go" - damaged. Found 1270 of 1307 data blocks.
+
+Opening: "ok.txt"
+Target: "ok.txt" - ok.`
+
+	got := parsePar2VerifyLog(log)
+
+	assert.Equal(t, map[string]bool{
+		"main.go": true,
+		"ok.txt":  false,
+	}, got)
+}
