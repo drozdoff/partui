@@ -3,19 +3,20 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"partui/par2"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 
+	gopar "github.com/akalin/gopar/par2"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
-type model struct {
+type Model struct {
 	currentDir string
 	fileList   list.Model
 	archived   []string
@@ -26,11 +27,13 @@ type model struct {
 	}
 }
 
-func (m model) Init() tea.Cmd {
+var numProcs = runtime.GOMAXPROCS(-1)
+
+func (m Model) Init() tea.Cmd {
 	return tea.SetWindowTitle("Partui")
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.mainWindow.width = msg.Width
@@ -63,14 +66,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "c":
 			item := m.fileList.SelectedItem().(fileItem)
-			createParFiles(m, item)
+			createParFiles(&m, item)
 			item.archive = true
 			m.fileList.SetItem(m.fileList.Index(), item)
 			m.fileList.CursorDown()
 		case "v":
 			item := m.fileList.SelectedItem().(fileItem)
-			verifyParFiles(m, item)
-			m.fileList.CursorDown()
+			verifyParFiles(&m, item)
+		// TODO: repair damaged files
 		case "enter":
 			item := m.fileList.SelectedItem().(fileItem)
 			if item.isDir {
@@ -87,31 +90,49 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func createParFiles(m model, item fileItem) {
-	cmd := exec.Command("par2", "c", item.title)
-	cmd.Dir = m.currentDir
-	_, err := cmd.CombinedOutput()
-	// todo: check output and handle errors
+func createParFiles(m *Model, item fileItem) {
+	// TODO: create par files for selected files or for a file under cursor in no selected files
+	// one index per selected file is default.
+	// override default behaviour in config??? specify index file name?
+	// UI for config?
+	// TODO: concurrent par files creation in case of a list
+	parPath := m.currentDir + "/" + item.title + ".par2"
+	filePaths := []string{m.currentDir + "/" + item.title}
+	options := gopar.CreateOptions{
+		SliceByteCount:  -1, // TODO: calculate block size from a file size
+		NumParityShards: -1,
+		NumGoroutines:   numProcs,
+		CreateDelegate:  gopar.DoNothingCreateDelegate{},
+	}
+	err := gopar.Create(parPath, filePaths, options)
 	printShowStopper(err)
 }
 
-func verifyParFiles(m model, item fileItem) {
-	cmd := exec.Command("par2", "v", item.title)
-	cmd.Dir = m.currentDir
-	output, err := cmd.CombinedOutput()
-	if err != nil && err.Error() == "exit status 1" {
-		// parse and show per-file repair necessity
-		results := parsePar2VerifyLog(string(output))
-		for _, needs := range results {
-			if needs {
-				item.damaged = true
-				m.fileList.SetItem(m.fileList.Index(), item)
-			}
-		}
+func verifyParFiles(m *Model, item fileItem) {
+	// TODO: propper logging
+	// TODO: how to manage existing par2 index files with different names?
+	parPath := m.currentDir + "/" + item.title + ".par2"
+	options := gopar.VerifyOptions{
+		NumGoroutines:  numProcs,
+		VerifyDelegate: &par2.FilenameCollector{},
 	}
+	res, err := gopar.Verify(parPath, options)
+	if err != nil {
+		m.fileList.NewStatusMessage(item.title + " can not be verified")
+		return
+	}
+
+	if res.ShardCounts.RepairNeeded() {
+		item.damaged = true
+		m.fileList.SetItem(m.fileList.Index(), item)
+		m.fileList.NewStatusMessage(item.title + " damaged")
+		return
+	}
+
+	m.fileList.NewStatusMessage(item.title + " is OK")
 }
 
-func (m model) View() string {
+func (m Model) View() string {
 	style := lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("63"))
 
 	content := fmt.Sprintf("%s\nPress Ctrl+C or q\n\n", m.fileList.View())
@@ -119,7 +140,7 @@ func (m model) View() string {
 	return style.Width(m.mainWindow.width - 2).Height(m.mainWindow.height - 2).Render(content)
 }
 
-func buildModelForDirectory(m *model, dir string) error {
+func buildModelForDirectory(m *Model, dir string) error {
 	m.currentDir = dir
 
 	osFiles, err := os.ReadDir(dir)
@@ -196,13 +217,13 @@ func hiddenFile(name string) bool {
 	return strings.HasPrefix(name, ".") || filepath.Ext(name) == ".par2"
 }
 
-func processIndexFiles(m *model, files []os.DirEntry) {
+func processIndexFiles(m *Model, files []os.DirEntry) {
 	for _, file := range files {
 		name := file.Name()
 		if isParIndex(name) {
 			archived, err := par2.ListPar2Filenames(m.currentDir + "/" + name)
 			if err != nil {
-				// todo: error handling
+				// TODO: error handling
 				continue
 			}
 			m.archived = append(m.archived, archived...)
@@ -210,53 +231,11 @@ func processIndexFiles(m *model, files []os.DirEntry) {
 	}
 }
 
-// parsePar2VerifyLog parses the output of `par2 v` and returns a map of
-// filename to a boolean indicating whether repair is needed for that file.
-// It recognizes lines in the form:
-//
-//	Target: "<name>" - ok.
-//	Target: "<name>" - damaged. Found X of Y data blocks.
-//
-// Files marked as "damaged", "missing" or "corrupt"
-// will be treated as needing repair.
-func parsePar2VerifyLog(log string) map[string]bool {
-	results := make(map[string]bool)
-
-	// Match: Target: "<file>" - <status>
-	// Example: Target: "main.go" - damaged. Found 1270 of 1307 data blocks.
-	targetRe := regexp.MustCompile(`(?m)^.*Target:\s+"(.+)"\s+-\s+(.+).*$`)
-
-	matches := targetRe.FindAllStringSubmatch(log, -1)
-	for _, m := range matches {
-		if len(m) < 3 {
-			continue
-		}
-		name := m[1]
-		status := strings.ToLower(m[2])
-
-		needsRepair := false
-		switch {
-		case strings.Contains(status, "ok"):
-			needsRepair = false
-		case strings.Contains(status, "damaged"):
-			needsRepair = true
-		case strings.Contains(status, "missing"):
-			needsRepair = true
-		case strings.Contains(status, "corrupt"):
-			needsRepair = true
-		}
-
-		results[name] = needsRepair
-	}
-
-	return results
-}
-
 func main() {
 	name, err := filepath.Abs(os.Args[0])
 	printShowStopper(err)
 
-	m := model{}
+	m := Model{}
 	err = buildModelForDirectory(&m, filepath.Dir(name))
 	printShowStopper(err)
 
