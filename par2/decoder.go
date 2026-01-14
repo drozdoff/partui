@@ -32,3 +32,45 @@ func ListPar2Filenames(path string) ([]string, error) {
 	}
 	return collector.names, nil
 }
+func CalculateBlockSize(fSize uint64, percentage uint64) int {
+
+	// f_size // 2**15
+	blockSizeMin := fSize >> 15
+
+	// (f_size * self.percentage) // 100
+	blockSizeF := (fSize * percentage) / 100
+
+	var blockCountMax uint64 = 127
+	if fSize < 1e6 {
+		blockCountMax = 7
+	} else if fSize < 4e6 {
+		blockCountMax = 15
+	} else if fSize < 20e6 {
+		blockCountMax = 31
+	}
+
+	var blockCount uint64
+	var blockSize uint64
+
+	if blockSizeF > blockSizeMin {
+		if blockSizeMin == 0 {
+			blockCount = 1
+			blockSize = blockSizeMin
+		} else {
+			// blockcount = min(blockcount_max, blocksize_f // blocksize_min)
+			calcCount := blockSizeF / blockSizeMin
+			if blockCountMax < calcCount {
+				blockCount = blockCountMax
+			} else {
+				blockCount = calcCount
+			}
+			blockSize = blockSizeF / blockCount
+		}
+	} else {
+		blockSize = 4
+	}
+
+	blockSize = (blockSize/4 + 1) * 4
+
+	return int(blockSize)
+}

@@ -36,9 +36,22 @@ func TestBuildModelForDirectory(t *testing.T) {
 
 	// Expect 4 entries
 	assert.Equal(t, 4, len(m.fileList.Items()))
-	expected := []string{"../", "a.txt", "b.bin", "cdir/"}
+	expected := []struct {
+		title string
+		size  uint64
+		isDir bool
+	}{
+		{"../", 0, true},
+		{"a.txt", 7, false},
+		{"b.bin", 7, false},
+		{"cdir/", 0, true},
+	}
+
 	for i, f := range m.fileList.Items() {
-		assert.Equal(t, expected[i], f.(fileItem).title)
+		assert.Equal(t, expected[i].title, f.(fileItem).title)
+		if !f.(fileItem).isDir {
+			assert.Equal(t, expected[i].size, f.(fileItem).size)
+		}
 	}
 
 	err = buildModelForDirectory(&m, filepath.Join(os.TempDir(), "non-existent-dir"))

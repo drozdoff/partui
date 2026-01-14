@@ -17,9 +17,10 @@ import (
 )
 
 type Model struct {
-	currentDir string
-	fileList   list.Model
-	archived   []string
+	currentDir    string
+	filesSelected int
+	fileList      list.Model
+	archived      []string
 
 	mainWindow struct {
 		width  int
@@ -27,10 +28,17 @@ type Model struct {
 	}
 }
 
+// TODO: make percentage configurable
+const percentage = 5
+
 var numProcs = runtime.GOMAXPROCS(-1)
 
 func (m Model) Init() tea.Cmd {
 	return tea.SetWindowTitle("Partui")
+}
+
+type processingFinishedMsg struct {
+	item string
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -60,16 +68,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case " ":
 			item := m.fileList.SelectedItem().(fileItem)
 			if !item.isDir && !item.archive {
+				if item.selected {
+					m.filesSelected -= 1
+				} else {
+					m.filesSelected += 1
+				}
 				item.selected = !item.selected
 				m.fileList.SetItem(m.fileList.Index(), item)
 				m.fileList.CursorDown()
 			}
 		case "c":
-			item := m.fileList.SelectedItem().(fileItem)
-			createParFiles(&m, item)
-			item.archive = true
-			m.fileList.SetItem(m.fileList.Index(), item)
-			m.fileList.CursorDown()
+			// TODO: create par files for selected files or for a file under cursor in no selected files
+			// one index per selected file is default.
+			// override default behaviour in config??? specify index file name?
+			// UI for config?
+			// TODO: concurrent par files creation in case of a list
+			if m.filesSelected > 0 {
+				//
+			} else {
+
+				item := m.fileList.SelectedItem().(fileItem)
+				// m.fileList.StartSpinner()
+				item.processing = true
+				m.fileList.SetItem(m.fileList.Index(), item)
+				m.fileList.CursorDown()
+				go createParFiles(&m, item)
+			}
 		case "v":
 			item := m.fileList.SelectedItem().(fileItem)
 			verifyParFiles(&m, item)
@@ -86,26 +110,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.fileList, cmd = m.fileList.Update(msg)
 		return m, cmd
+	case processingFinishedMsg:
+		var cmd tea.Cmd
+		title := msg.item
+
+		index, item := findFileItem(m.fileList.Items(), title)
+		if index != -1 {
+			item.processing = false
+			item.archive = true
+			m.fileList.SetItem(index, item)
+			m.fileList, cmd = m.fileList.Update(msg)
+		}
+		return m, cmd
 	}
 	return m, nil
 }
 
+func findFileItem(items []list.Item, title string) (int, fileItem) {
+	for i, item := range items {
+		fi := item.(fileItem)
+		if fi.title == title {
+			return i, fi
+		}
+	}
+	// no item found is possible scenario if dir is changed while some files are still processing
+	return -1, fileItem{}
+}
+
 func createParFiles(m *Model, item fileItem) {
-	// TODO: create par files for selected files or for a file under cursor in no selected files
-	// one index per selected file is default.
-	// override default behaviour in config??? specify index file name?
-	// UI for config?
-	// TODO: concurrent par files creation in case of a list
 	parPath := m.currentDir + "/" + item.title + ".par2"
-	filePaths := []string{m.currentDir + "/" + item.title}
+
 	options := gopar.CreateOptions{
-		SliceByteCount:  -1, // TODO: calculate block size from a file size
+		SliceByteCount:  par2.CalculateBlockSize(item.size, percentage),
 		NumParityShards: -1,
 		NumGoroutines:   numProcs,
 		CreateDelegate:  gopar.DoNothingCreateDelegate{},
 	}
+
+	filePaths := []string{m.currentDir + "/" + item.title}
 	err := gopar.Create(parPath, filePaths, options)
 	printShowStopper(err)
+	program.Send(processingFinishedMsg{item: item.title})
 }
 
 func verifyParFiles(m *Model, item fileItem) {
@@ -125,7 +170,7 @@ func verifyParFiles(m *Model, item fileItem) {
 	if res.ShardCounts.RepairNeeded() {
 		item.damaged = true
 		m.fileList.SetItem(m.fileList.Index(), item)
-		m.fileList.NewStatusMessage(item.title + " damaged")
+		m.fileList.NewStatusMessage(item.title + "is damaged")
 		return
 	}
 
@@ -175,6 +220,7 @@ func buildModelForDirectory(m *Model, dir string) error {
 
 		items = append(items, fileItem{
 			title:   title,
+			size:    uint64(fileInfo.Size()),
 			archive: slices.Contains(m.archived, name),
 			desc:    fmt.Sprintf("%d bytes", fileInfo.Size()),
 			isDir:   file.IsDir(),
@@ -231,6 +277,8 @@ func processIndexFiles(m *Model, files []os.DirEntry) {
 	}
 }
 
+var program *tea.Program
+
 func main() {
 	name, err := filepath.Abs(os.Args[0])
 	printShowStopper(err)
@@ -239,9 +287,9 @@ func main() {
 	err = buildModelForDirectory(&m, filepath.Dir(name))
 	printShowStopper(err)
 
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	program = tea.NewProgram(m, tea.WithAltScreen())
 
-	_, err = p.Run()
+	_, err = program.Run()
 	printShowStopper(err)
 }
 
