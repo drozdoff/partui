@@ -12,6 +12,7 @@ import (
 
 	gopar "github.com/akalin/gopar/par2"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -28,20 +29,32 @@ type Model struct {
 	}
 }
 
+type processingFinishedMsg struct {
+	dir   string
+	title string
+}
+
+type processingErrorMsg struct {
+	dir   string
+	title string
+	err   error
+}
+
 // TODO: make percentage configurable
 const percentage = 5
 
 var numProcs = runtime.GOMAXPROCS(-1)
 
+// counting semaphore for any kind of workers
+var workers = make(chan struct{}, numProcs)
+
 func (m Model) Init() tea.Cmd {
 	return tea.SetWindowTitle("Partui")
 }
 
-type processingFinishedMsg struct {
-	item string
-}
-
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.mainWindow.width = msg.Width
@@ -58,7 +71,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h = 0
 		}
 		m.fileList.SetHeight(h)
-		var cmd tea.Cmd
+
 		m.fileList, cmd = m.fileList.Update(msg)
 		return m, cmd
 	case tea.KeyMsg:
@@ -83,17 +96,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// override default behaviour in config??? specify index file name?
 			// UI for config?
 			// TODO: concurrent par files creation in case of a list
+			// TODO: validation for file uniqueness
 			if m.filesSelected > 0 {
 				//
 			} else {
-
 				item := m.fileList.SelectedItem().(fileItem)
-				// m.fileList.StartSpinner()
 				item.processing = true
 				m.fileList.SetItem(m.fileList.Index(), item)
 				m.fileList.CursorDown()
-				go createParFiles(&m, item)
+				go createParFiles(m.currentDir, item.title, item.size)
 			}
+			return m, m.fileList.StartSpinner()
 		case "v":
 			item := m.fileList.SelectedItem().(fileItem)
 			verifyParFiles(&m, item)
@@ -107,22 +120,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				printShowStopper(err)
 			}
 		}
-		var cmd tea.Cmd
+
 		m.fileList, cmd = m.fileList.Update(msg)
 		return m, cmd
 	case processingFinishedMsg:
-		var cmd tea.Cmd
-		title := msg.item
-
+		title := msg.title
 		index, item := findFileItem(m.fileList.Items(), title)
 		if index != -1 {
 			item.processing = false
 			item.archive = true
 			m.fileList.SetItem(index, item)
 			m.fileList, cmd = m.fileList.Update(msg)
+			m.fileList.StopSpinner()
+			return m, cmd
 		}
+	case processingErrorMsg:
+		// TODO: Log processing error
+		title := msg.title
+		index, item := findFileItem(m.fileList.Items(), title)
+		if index != -1 {
+			item.processing = false
+			m.fileList.SetItem(index, item)
+			m.fileList, cmd = m.fileList.Update(msg)
+			return m, cmd
+		}
+	case spinner.TickMsg:
+		m.fileList, cmd = m.fileList.Update(msg)
 		return m, cmd
 	}
+
 	return m, nil
 }
 
@@ -137,20 +163,27 @@ func findFileItem(items []list.Item, title string) (int, fileItem) {
 	return -1, fileItem{}
 }
 
-func createParFiles(m *Model, item fileItem) {
-	parPath := m.currentDir + "/" + item.title + ".par2"
+func createParFiles(dir string, title string, size uint64) {
+	workers <- struct{}{}
+	defer func() { <-workers }()
+
+	filePath := dir + "/" + title
+	parPath := filePath + ".par2"
 
 	options := gopar.CreateOptions{
-		SliceByteCount:  par2.CalculateBlockSize(item.size, percentage),
+		SliceByteCount:  par2.CalculateBlockSize(size, percentage),
 		NumParityShards: -1,
 		NumGoroutines:   numProcs,
 		CreateDelegate:  gopar.DoNothingCreateDelegate{},
 	}
 
-	filePaths := []string{m.currentDir + "/" + item.title}
-	err := gopar.Create(parPath, filePaths, options)
-	printShowStopper(err)
-	program.Send(processingFinishedMsg{item: item.title})
+	err := gopar.Create(parPath, []string{filePath}, options)
+	if err != nil {
+		program.Send(processingErrorMsg{dir: dir, title: title, err: err})
+		return
+	}
+
+	program.Send(processingFinishedMsg{dir: dir, title: title})
 }
 
 func verifyParFiles(m *Model, item fileItem) {
