@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 
 	gopar "github.com/akalin/gopar/par2"
 	"github.com/charmbracelet/bubbles/list"
@@ -47,6 +48,8 @@ var numProcs = runtime.GOMAXPROCS(-1)
 
 // counting semaphore for any kind of workers
 var workers = make(chan struct{}, numProcs)
+
+var wg sync.WaitGroup
 
 func (m Model) Init() tea.Cmd {
 	return tea.SetWindowTitle("Partui")
@@ -104,6 +107,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				item.processing = true
 				m.fileList.SetItem(m.fileList.Index(), item)
 				m.fileList.CursorDown()
+				wg.Add(1)
 				go createParFiles(m.currentDir, item.title, item.size)
 			}
 			return m, m.fileList.StartSpinner()
@@ -165,7 +169,10 @@ func findFileItem(items []list.Item, title string) (int, fileItem) {
 
 func createParFiles(dir string, title string, size uint64) {
 	workers <- struct{}{}
-	defer func() { <-workers }()
+	defer func() {
+		<-workers
+		wg.Done()
+	}()
 
 	filePath := dir + "/" + title
 	parPath := filePath + ".par2"
@@ -324,6 +331,7 @@ func main() {
 
 	_, err = program.Run()
 	printShowStopper(err)
+	wg.Wait()
 }
 
 func printShowStopper(err error) {
