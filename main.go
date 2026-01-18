@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"partui/par2"
@@ -50,6 +51,8 @@ var numProcs = runtime.GOMAXPROCS(-1)
 var workers = make(chan struct{}, numProcs)
 
 var wg sync.WaitGroup
+var program *tea.Program
+var ctx context.Context
 
 func (m Model) Init() tea.Cmd {
 	return tea.SetWindowTitle("Partui")
@@ -173,6 +176,14 @@ func createParFiles(dir string, title string, size uint64) {
 		<-workers
 		wg.Done()
 	}()
+
+	// don't start a new file if program exited
+	select {
+	case <-ctx.Done():
+		return
+	default:
+		// do nothing
+	}
 
 	filePath := dir + "/" + title
 	parPath := filePath + ".par2"
@@ -317,8 +328,6 @@ func processIndexFiles(m *Model, files []os.DirEntry) {
 	}
 }
 
-var program *tea.Program
-
 func main() {
 	name, err := filepath.Abs(os.Args[0])
 	printShowStopper(err)
@@ -327,11 +336,14 @@ func main() {
 	err = buildModelForDirectory(&m, filepath.Dir(name))
 	printShowStopper(err)
 
-	program = tea.NewProgram(m, tea.WithAltScreen())
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithCancel(context.Background())
+	program = tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
 
 	_, err = program.Run()
-	printShowStopper(err)
+	cancel()
 	wg.Wait()
+	printShowStopper(err)
 }
 
 func printShowStopper(err error) {
