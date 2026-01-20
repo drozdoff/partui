@@ -97,14 +97,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.fileList.CursorDown()
 			}
 		case "c":
-			// TODO: create par files for selected files or for a file under cursor in no selected files
-			// one index per selected file is default.
-			// override default behaviour in config??? specify index file name?
+			// TODO: Now one index file per selected file is default.
+			// override this behaviour in config??? specify index file name for a list of files?
 			// UI for config?
-			// TODO: concurrent par files creation in case of a list
-			// TODO: validation for file uniqueness
+			// TODO: handle change dir during process. file list is now strictly for current dir.
 			if m.filesSelected > 0 {
-				//
+				for index, i := range m.fileList.Items() {
+					item := i.(fileItem)
+					if item.selected {
+						item.processing = true
+						item.selected = false
+						m.fileList.SetItem(index, item)
+						wg.Add(1)
+						go createParFiles(m.currentDir, item.title, item.size)
+					}
+				}
 			} else {
 				item := m.fileList.SelectedItem().(fileItem)
 				item.processing = true
