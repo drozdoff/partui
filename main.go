@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 
@@ -128,8 +129,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if item.isDir {
 				var err error
 				dir := m.currentDir + "/" + item.title
-				err = buildModelForDirectory(m, filepath.Dir(dir))
+				newDir := filepath.Dir(dir)
+
+				// Save current dir to select when going back
+				var prevDir string = ""
+				if item.title == "../" {
+					prevDir = m.currentDir
+				}
+
+				err = buildModelForDirectory(m, newDir)
 				printShowStopper(err)
+				// If going to parent, select the directory we came from
+				if prevDir != "" {
+					idx := findDirIndex(m.fileList.Items(), prevDir)
+					if idx > 0 {
+						m.fileList.Select(idx)
+					}
+				}
 			}
 		}
 
@@ -146,7 +162,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fileList.StopSpinner()
 		}
 
-		// Обновляем jobList - ищем задачу и помечаем как выполненную
+		// Update jobList - find the job and mark it as completed
 		jobItems := m.jobList.Items()
 		jiIndex, _ := findJobListItem(jobItems, title)
 		if jiIndex != -1 {
@@ -327,6 +343,17 @@ func buildModelForDirectory(m *Model, dir string) error {
 		})
 	}
 
+	// Sorting: directories first, then files, by name
+	sort.Slice(items, func(i, j int) bool {
+		a := items[i].(fileListItem)
+		b := items[j].(fileListItem)
+		// If types are different - directories first
+		if a.isDir != b.isDir {
+			return a.isDir
+		}
+		return a.title < b.title
+	})
+
 	m.fileList = list.New(items, newFileListItemDelegate(), 0, 0)
 	m.fileList.Title = m.currentDir
 	m.fileList.SetShowHelp(false)
@@ -336,6 +363,19 @@ func buildModelForDirectory(m *Model, dir string) error {
 	m.fileList.DisableQuitKeybindings()
 
 	return nil
+}
+
+func findDirIndex(items []list.Item, dirName string) int {
+	// dirName is full path, we need to find the directory entry
+	// The entry title will be "dirname/"
+	targetTitle := filepath.Base(dirName) + "/"
+	for i, item := range items {
+		fi := item.(fileListItem)
+		if fi.isDir && fi.title == targetTitle {
+			return i
+		}
+	}
+	return 0
 }
 
 func isParIndex(filename string) bool {

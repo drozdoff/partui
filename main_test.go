@@ -42,9 +42,9 @@ func TestBuildModelForDirectory(t *testing.T) {
 		isDir bool
 	}{
 		{"../", 0, true},
+		{"cdir/", 0, true},
 		{"a.txt", 7, false},
 		{"b.bin", 7, false},
-		{"cdir/", 0, true},
 	}
 
 	for i, f := range m.fileList.Items() {
