@@ -19,16 +19,22 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+type Job struct {
+	jobType     string
+	name        string
+	description string
+}
+
 type Model struct {
+	fileList list.Model
+	jobList  list.Model
+
 	currentDir    string
 	filesSelected int
-	fileList      list.Model
 	archived      []string
 
-	mainWindow struct {
-		width  int
-		height int
-	}
+	width  int
+	height int
 }
 
 type processingFinishedMsg struct {
@@ -54,30 +60,20 @@ var wg sync.WaitGroup
 var program *tea.Program
 var ctx context.Context
 
-func (m Model) Init() tea.Cmd {
+func (m *Model) Init() tea.Cmd {
 	return tea.SetWindowTitle("Partui")
 }
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.mainWindow.width = msg.Width
-		m.mainWindow.height = msg.Height
+		m.width = msg.Width
+		m.height = msg.Height
 		// size list to fit inside the bordered box from View()
-		w := m.mainWindow.width - 2
-		if w < 0 {
-			w = 0
-		}
-		m.fileList.SetWidth(w)
 
-		h := m.mainWindow.height - 6
-		if h < 0 {
-			h = 0
-		}
-		m.fileList.SetHeight(h)
-
+		m.jobList.Update(msg)
 		m.fileList, cmd = m.fileList.Update(msg)
 		return m, cmd
 	case tea.KeyMsg:
@@ -85,7 +81,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q":
 			return m, tea.Quit
 		case " ":
-			item := m.fileList.SelectedItem().(fileItem)
+			item := m.fileList.SelectedItem().(fileListItem)
 			if !item.isDir && !item.archive {
 				if item.selected {
 					m.filesSelected -= 1
@@ -103,34 +99,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// TODO: handle change dir during process. file list is now strictly for current dir.
 			if m.filesSelected > 0 {
 				for index, i := range m.fileList.Items() {
-					item := i.(fileItem)
+					item := i.(fileListItem)
 					if item.selected {
 						item.processing = true
 						item.selected = false
 						m.fileList.SetItem(index, item)
+						m.addJob(item.title)
 						wg.Add(1)
 						go createParFiles(m.currentDir, item.title, item.size)
 					}
 				}
 			} else {
-				item := m.fileList.SelectedItem().(fileItem)
+				item := m.fileList.SelectedItem().(fileListItem)
 				item.processing = true
 				m.fileList.SetItem(m.fileList.Index(), item)
 				m.fileList.CursorDown()
+				m.addJob(item.title)
 				wg.Add(1)
 				go createParFiles(m.currentDir, item.title, item.size)
 			}
 			return m, m.fileList.StartSpinner()
 		case "v":
-			item := m.fileList.SelectedItem().(fileItem)
-			verifyParFiles(&m, item)
+			item := m.fileList.SelectedItem().(fileListItem)
+			verifyParFiles(m, item)
 		// TODO: repair damaged files
 		case "enter":
-			item := m.fileList.SelectedItem().(fileItem)
+			item := m.fileList.SelectedItem().(fileListItem)
 			if item.isDir {
 				var err error
 				dir := m.currentDir + "/" + item.title
-				err = buildModelForDirectory(&m, filepath.Dir(dir))
+				err = buildModelForDirectory(m, filepath.Dir(dir))
 				printShowStopper(err)
 			}
 		}
@@ -139,19 +137,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case processingFinishedMsg:
 		title := msg.title
-		index, item := findFileItem(m.fileList.Items(), title)
+		index, item := findFileListItem(m.fileList.Items(), title)
 		if index != -1 {
 			item.processing = false
 			item.archive = true
 			m.fileList.SetItem(index, item)
 			m.fileList, cmd = m.fileList.Update(msg)
 			m.fileList.StopSpinner()
-			return m, cmd
 		}
+
+		// Обновляем jobList - ищем задачу и помечаем как выполненную
+		jobItems := m.jobList.Items()
+		jiIndex, _ := findJobListItem(jobItems, title)
+		if jiIndex != -1 {
+			ji := jobItems[jiIndex].(jobListItem)
+			ji.processing = false
+			ji.desc = "Done"
+			jobItems[jiIndex] = ji
+			m.jobList.SetItems(jobItems)
+		}
+
+		return m, cmd
 	case processingErrorMsg:
 		// TODO: Log processing error
 		title := msg.title
-		index, item := findFileItem(m.fileList.Items(), title)
+		index, item := findFileListItem(m.fileList.Items(), title)
 		if index != -1 {
 			item.processing = false
 			m.fileList.SetItem(index, item)
@@ -166,15 +176,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func findFileItem(items []list.Item, title string) (int, fileItem) {
+func findFileListItem(items []list.Item, title string) (int, fileListItem) {
 	for i, item := range items {
-		fi := item.(fileItem)
+		fi := item.(fileListItem)
 		if fi.title == title {
 			return i, fi
 		}
 	}
 	// no item found is possible scenario if dir is changed while some files are still processing
-	return -1, fileItem{}
+	return -1, fileListItem{}
+}
+
+func findJobListItem(items []list.Item, title string) (int, jobListItem) {
+	for i, item := range items {
+		ji := item.(jobListItem)
+		if ji.title == title {
+			return i, ji
+		}
+	}
+	return -1, jobListItem{}
+}
+
+func (m *Model) addJob(title string) {
+	jobItems := m.jobList.Items()
+	jobItems = append(jobItems, jobListItem{
+		title:      title,
+		desc:       "Processing...",
+		processing: true,
+	})
+	m.jobList.SetItems(jobItems)
 }
 
 func createParFiles(dir string, title string, size uint64) {
@@ -211,7 +241,7 @@ func createParFiles(dir string, title string, size uint64) {
 	program.Send(processingFinishedMsg{dir: dir, title: title})
 }
 
-func verifyParFiles(m *Model, item fileItem) {
+func verifyParFiles(m *Model, item fileListItem) {
 	// TODO: propper logging
 	// TODO: how to manage existing par2 index files with different names?
 	parPath := m.currentDir + "/" + item.title + ".par2"
@@ -235,12 +265,24 @@ func verifyParFiles(m *Model, item fileItem) {
 	m.fileList.NewStatusMessage(item.title + " is OK")
 }
 
-func (m Model) View() string {
-	style := lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("63"))
+func (m *Model) View() string {
+	style := lipgloss.NewStyle()
 
-	content := fmt.Sprintf("%s\nPress Ctrl+C or q\n\n", m.fileList.View())
+	w := m.width / 2
+	h := m.height - 6
+	if h < 0 {
+		h = 0
+	}
+	m.fileList.SetHeight(h)
+	m.fileList.SetWidth(w)
 
-	return style.Width(m.mainWindow.width - 2).Height(m.mainWindow.height - 2).Render(content)
+	m.jobList.SetHeight(h)
+	m.jobList.SetWidth(w)
+
+	left := style.Render(fmt.Sprintf("%s\nPress Ctrl+C or q\n", m.fileList.View()))
+	rigth := style.Render(fmt.Sprintf("%s\nEnd of job list\n", m.jobList.View()))
+
+	return lipgloss.JoinHorizontal(lipgloss.Center, left, rigth)
 }
 
 func buildModelForDirectory(m *Model, dir string) error {
@@ -256,7 +298,7 @@ func buildModelForDirectory(m *Model, dir string) error {
 	// unless root directory, add .. to a list of directories
 	parent := filepath.Dir(dir)
 	if dir != parent {
-		items = append(items, fileItem{title: "../", isDir: true, desc: "Parent directory"})
+		items = append(items, fileListItem{title: "../", isDir: true, desc: "Parent directory"})
 	}
 
 	// populate information about already archived files first
@@ -276,7 +318,7 @@ func buildModelForDirectory(m *Model, dir string) error {
 			title = title + "/"
 		}
 
-		items = append(items, fileItem{
+		items = append(items, fileListItem{
 			title:   title,
 			size:    uint64(fileInfo.Size()),
 			archive: slices.Contains(m.archived, name),
@@ -285,19 +327,10 @@ func buildModelForDirectory(m *Model, dir string) error {
 		})
 	}
 
-	m.fileList = list.New(items, newItemDelegate(), 0, 0)
-	w := m.mainWindow.width - 2
-	if w < 0 {
-		w = 0
-	}
-	h := m.mainWindow.height - 6
-	if h < 0 {
-		h = 0
-	}
-	m.fileList.SetWidth(w)
-	m.fileList.SetHeight(h)
+	m.fileList = list.New(items, newFileListItemDelegate(), 0, 0)
 	m.fileList.Title = m.currentDir
 	m.fileList.SetShowHelp(false)
+	m.fileList.SetShowStatusBar(false)
 	m.fileList.SetFilterState(list.Unfiltered)
 	m.fileList.SetShowPagination(true)
 	m.fileList.DisableQuitKeybindings()
@@ -340,12 +373,22 @@ func main() {
 	printShowStopper(err)
 
 	m := Model{}
+
+	jobItems := make([]list.Item, 0)
+	m.jobList = list.New(jobItems, newJobListItemDelegate(), 0, 0)
+	m.jobList.Title = "Active Jobs"
+	m.jobList.SetShowHelp(false)
+	m.jobList.SetShowStatusBar(false)
+	m.jobList.SetFilterState(list.Unfiltered)
+	m.jobList.SetShowPagination(false)
+	m.jobList.DisableQuitKeybindings()
+
 	err = buildModelForDirectory(&m, filepath.Dir(name))
 	printShowStopper(err)
 
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithCancel(context.Background())
-	program = tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
+	program = tea.NewProgram(&m, tea.WithAltScreen(), tea.WithContext(ctx))
 
 	_, err = program.Run()
 	cancel()

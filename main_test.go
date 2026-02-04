@@ -48,9 +48,10 @@ func TestBuildModelForDirectory(t *testing.T) {
 	}
 
 	for i, f := range m.fileList.Items() {
-		assert.Equal(t, expected[i].title, f.(fileItem).title)
-		if !f.(fileItem).isDir {
-			assert.Equal(t, expected[i].size, f.(fileItem).size)
+		item := f.(fileListItem)
+		assert.Equal(t, expected[i].title, item.title)
+		if !item.isDir {
+			assert.Equal(t, expected[i].size, item.size)
 		}
 	}
 
