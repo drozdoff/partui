@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -57,12 +58,23 @@ func (d fileListItemDelegate) Render(w io.Writer, m list.Model, index int, item 
 		return
 	}
 
-	spacer_len := m.Width() - len(it.title) - len(it.desc)
+	// Truncate title if it doesn't fit
+	title := it.title
+	titleLen := utf8.RuneCountInString(title)
+	descLen := utf8.RuneCountInString(it.desc)
+	availableWidth := m.Width() - descLen - 1 // -1 for space
+	if availableWidth > 0 && titleLen > availableWidth {
+		// Truncate by runes
+		titleRunes := []rune(title)
+		title = string(titleRunes[:availableWidth-1]) + "~"
+	}
+
+	spacer_len := m.Width() - utf8.RuneCountInString(title) - descLen
 	if spacer_len <= 0 {
 		spacer_len = 1
 	}
 	spacer := strings.Repeat(" ", spacer_len)
-	content := it.title + spacer + it.desc
+	content := title + spacer + it.desc
 
 	if index == m.Index() {
 		style = d.selected

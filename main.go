@@ -153,7 +153,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case processingFinishedMsg:
 		title := msg.title
-		index, item := findFileListItem(m.fileList.Items(), title)
+		index, item := findListItem(m.fileList.Items(), title, func(fi fileListItem) string { return fi.title })
 		if index != -1 {
 			item.processing = false
 			item.archive = true
@@ -164,7 +164,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Update jobList - find the job and mark it as completed
 		jobItems := m.jobList.Items()
-		jiIndex, _ := findJobListItem(jobItems, title)
+		jiIndex, _ := findListItem(jobItems, title, func(ji jobListItem) string { return ji.title })
 		if jiIndex != -1 {
 			ji := jobItems[jiIndex].(jobListItem)
 			ji.processing = false
@@ -177,7 +177,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case processingErrorMsg:
 		// TODO: Log processing error
 		title := msg.title
-		index, item := findFileListItem(m.fileList.Items(), title)
+		index, item := findListItem(m.fileList.Items(), title, func(fi fileListItem) string { return fi.title })
 		if index != -1 {
 			item.processing = false
 			m.fileList.SetItem(index, item)
@@ -192,25 +192,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func findFileListItem(items []list.Item, title string) (int, fileListItem) {
+// findListItem searches for an item with the given title in the list.
+// Returns the index and the item, or -1 and a zero value if not found.
+func findListItem[T any](items []list.Item, title string, getTitle func(T) string) (int, T) {
 	for i, item := range items {
-		fi := item.(fileListItem)
-		if fi.title == title {
-			return i, fi
+		typedItem, ok := item.(T)
+		if !ok {
+			continue
+		}
+		if getTitle(typedItem) == title {
+			return i, typedItem
 		}
 	}
 	// no item found is possible scenario if dir is changed while some files are still processing
-	return -1, fileListItem{}
-}
-
-func findJobListItem(items []list.Item, title string) (int, jobListItem) {
-	for i, item := range items {
-		ji := item.(jobListItem)
-		if ji.title == title {
-			return i, ji
-		}
-	}
-	return -1, jobListItem{}
+	var zero T
+	return -1, zero
 }
 
 func (m *Model) addJob(title string) {
