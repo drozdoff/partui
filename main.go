@@ -27,8 +27,8 @@ type Job struct {
 }
 
 type Model struct {
-	fileList list.Model
-	jobList  list.Model
+	fileList  list.Model
+	indexList list.Model
 
 	currentDir    string
 	filesSelected int
@@ -74,7 +74,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		// size list to fit inside the bordered box from View()
 
-		m.jobList.Update(msg)
+		m.indexList.Update(msg)
 		m.fileList, cmd = m.fileList.Update(msg)
 		return m, cmd
 	case tea.KeyMsg:
@@ -105,7 +105,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						item.processing = true
 						item.selected = false
 						m.fileList.SetItem(index, item)
-						m.addJob(item.title)
+						m.addIndex(item.title + ".par2")
 						wg.Add(1)
 						go createParFiles(m.currentDir, item.title, item.size)
 					}
@@ -115,7 +115,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				item.processing = true
 				m.fileList.SetItem(m.fileList.Index(), item)
 				m.fileList.CursorDown()
-				m.addJob(item.title)
+				m.addIndex(item.title + ".par2")
 				wg.Add(1)
 				go createParFiles(m.currentDir, item.title, item.size)
 			}
@@ -162,15 +162,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fileList.StopSpinner()
 		}
 
-		// Update jobList - find the job and mark it as completed
-		jobItems := m.jobList.Items()
-		jiIndex, _ := findListItem(jobItems, title, func(ji jobListItem) string { return ji.title })
-		if jiIndex != -1 {
-			ji := jobItems[jiIndex].(jobListItem)
-			ji.processing = false
-			ji.desc = "Done"
-			jobItems[jiIndex] = ji
-			m.jobList.SetItems(jobItems)
+		// Update indexList - find the entry and mark it as completed
+		indexItems := m.indexList.Items()
+		iiIndex, _ := findListItem(indexItems, title+".par2", func(ii indexListItem) string { return ii.par2Filename })
+		if iiIndex != -1 {
+			ii := indexItems[iiIndex].(indexListItem)
+			ii.desc = "OK"
+			ii.status = JobStatusOK
+			indexItems[iiIndex] = ii
+			m.indexList.SetItems(indexItems)
 		}
 
 		return m, cmd
@@ -183,6 +183,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fileList.SetItem(index, item)
 			m.fileList, cmd = m.fileList.Update(msg)
 			return m, cmd
+		}
+
+		// Update indexList - mark entry as damaged
+		indexItems := m.indexList.Items()
+		iiIndex, _ := findListItem(indexItems, title+".par2", func(ii indexListItem) string { return ii.par2Filename })
+		if iiIndex != -1 {
+			ii := indexItems[iiIndex].(indexListItem)
+			ii.desc = "Damaged"
+			ii.status = JobStatusDamaged
+			indexItems[iiIndex] = ii
+			m.indexList.SetItems(indexItems)
 		}
 	case spinner.TickMsg:
 		m.fileList, cmd = m.fileList.Update(msg)
@@ -209,14 +220,14 @@ func findListItem[T any](items []list.Item, title string, getTitle func(T) strin
 	return -1, zero
 }
 
-func (m *Model) addJob(title string) {
-	jobItems := m.jobList.Items()
-	jobItems = append(jobItems, jobListItem{
-		title:      title,
-		desc:       "Processing...",
-		processing: true,
+func (m *Model) addIndex(par2Filename string) {
+	indexItems := m.indexList.Items()
+	indexItems = append(indexItems, indexListItem{
+		par2Filename: par2Filename,
+		desc:         "Processing...",
+		status:       JobStatusProcessing,
 	})
-	m.jobList.SetItems(jobItems)
+	m.indexList.SetItems(indexItems)
 }
 
 func createParFiles(dir string, title string, size uint64) {
@@ -288,11 +299,11 @@ func (m *Model) View() string {
 	m.fileList.SetHeight(h)
 	m.fileList.SetWidth(w)
 
-	m.jobList.SetHeight(h)
-	m.jobList.SetWidth(w)
+	m.indexList.SetHeight(h)
+	m.indexList.SetWidth(w)
 
 	left := style.Render(fmt.Sprintf("%s\nPress Ctrl+C or q\n", m.fileList.View()))
-	rigth := style.Render(fmt.Sprintf("%s\nEnd of job list\n", m.jobList.View()))
+	rigth := style.Render(fmt.Sprintf("%s\nIndex Files\n", m.indexList.View()))
 
 	return lipgloss.JoinHorizontal(lipgloss.Center, left, rigth)
 }
@@ -306,15 +317,13 @@ func buildModelForDirectory(m *Model, dir string) error {
 	}
 
 	items := make([]list.Item, 0, len(osFiles)+1)
+	indexItems := processIndexFiles(m, osFiles)
 
 	// unless root directory, add .. to a list of directories
 	parent := filepath.Dir(dir)
 	if dir != parent {
 		items = append(items, fileListItem{title: "../", isDir: true, desc: "Parent directory"})
 	}
-
-	// populate information about already archived files first
-	processIndexFiles(m, osFiles)
 
 	// build a list of files and directories to display
 	for _, file := range osFiles {
@@ -358,6 +367,15 @@ func buildModelForDirectory(m *Model, dir string) error {
 	m.fileList.SetShowPagination(true)
 	m.fileList.DisableQuitKeybindings()
 
+	// Populate indexList with existing .par2 index files
+	m.indexList = list.New(indexItems, newIndexListItemDelegate(), 0, 0)
+	m.indexList.Title = "Index Files"
+	m.indexList.SetShowHelp(false)
+	m.indexList.SetShowStatusBar(false)
+	m.indexList.SetFilterState(list.Unfiltered)
+	m.indexList.SetShowPagination(false)
+	m.indexList.DisableQuitKeybindings()
+
 	return nil
 }
 
@@ -390,7 +408,8 @@ func hiddenFile(name string) bool {
 	return strings.HasPrefix(name, ".") || filepath.Ext(name) == ".par2"
 }
 
-func processIndexFiles(m *Model, files []os.DirEntry) {
+func processIndexFiles(m *Model, files []os.DirEntry) []list.Item {
+	indexItems := make([]list.Item, 0)
 	for _, file := range files {
 		name := file.Name()
 		if isParIndex(name) {
@@ -400,8 +419,15 @@ func processIndexFiles(m *Model, files []os.DirEntry) {
 				continue
 			}
 			m.archived = append(m.archived, archived...)
+			indexItems = append(indexItems, indexListItem{
+				par2Filename: name,
+				desc:         "OK",
+				status:       JobStatusOK,
+			})
+
 		}
 	}
+	return indexItems
 }
 
 func main() {
@@ -409,15 +435,6 @@ func main() {
 	printShowStopper(err)
 
 	m := Model{}
-
-	jobItems := make([]list.Item, 0)
-	m.jobList = list.New(jobItems, newJobListItemDelegate(), 0, 0)
-	m.jobList.Title = "Active Jobs"
-	m.jobList.SetShowHelp(false)
-	m.jobList.SetShowStatusBar(false)
-	m.jobList.SetFilterState(list.Unfiltered)
-	m.jobList.SetShowPagination(false)
-	m.jobList.DisableQuitKeybindings()
 
 	err = buildModelForDirectory(&m, filepath.Dir(name))
 	printShowStopper(err)
