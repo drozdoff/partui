@@ -26,6 +26,13 @@ type Job struct {
 	description string
 }
 
+type ListFocus string
+
+const (
+	FocusFile  ListFocus = "file"
+	FocusIndex ListFocus = "index"
+)
+
 type Model struct {
 	fileList  list.Model
 	indexList list.Model
@@ -33,6 +40,8 @@ type Model struct {
 	currentDir    string
 	filesSelected int
 	archived      []string
+
+	focus ListFocus
 
 	width  int
 	height int
@@ -81,7 +90,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
+		case "tab":
+			if m.focus == FocusFile {
+				m.focus = FocusIndex
+			} else {
+				m.focus = FocusFile
+			}
+			return m, nil
+		case "up", "down", "j", "k":
+			// Navigate the focused list
+			if m.focus == FocusFile {
+				m.fileList, cmd = m.fileList.Update(msg)
+			} else {
+				m.indexList, cmd = m.indexList.Update(msg)
+			}
+			return m, cmd
 		case " ":
+			// Only work in file list
+			if m.focus != FocusFile {
+				return m, nil
+			}
 			item := m.fileList.SelectedItem().(fileListItem)
 			if !item.isDir && !item.archive {
 				if item.selected {
@@ -94,6 +122,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.fileList.CursorDown()
 			}
 		case "c":
+			// Only work in file list
+			if m.focus != FocusFile {
+				return m, nil
+			}
 			// TODO: Now one index file per selected file is default.
 			// override this behaviour in config??? specify index file name for a list of files?
 			// UI for config?
@@ -121,10 +153,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.fileList.StartSpinner()
 		case "v":
+			// Only work in file list
+			if m.focus != FocusFile {
+				return m, nil
+			}
 			item := m.fileList.SelectedItem().(fileListItem)
 			verifyParFiles(m, item)
 		// TODO: repair damaged files
 		case "enter":
+			// Only work in file list
+			if m.focus != FocusFile {
+				return m, nil
+			}
 			item := m.fileList.SelectedItem().(fileListItem)
 			if item.isDir {
 				var err error
@@ -149,6 +189,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// Always update fileList for spinner and other messages
 		m.fileList, cmd = m.fileList.Update(msg)
 		return m, cmd
 	case processingFinishedMsg:
@@ -302,14 +343,24 @@ func (m *Model) View() string {
 	m.indexList.SetHeight(h)
 	m.indexList.SetWidth(w)
 
-	left := style.Render(fmt.Sprintf("%s\nPress Ctrl+C or q\n", m.fileList.View()))
-	rigth := style.Render(fmt.Sprintf("%s\nIndex Files\n", m.indexList.View()))
+	// Apply focus styling to borders
+	leftStyle := style
+	rightStyle := style
+	// if m.focus == FocusFile {
+	// } else {
+	// }
+
+	left := leftStyle.Render(fmt.Sprintf("%s\nPress Tab to switch focus, Ctrl+C or q to quit\n", m.fileList.View()))
+	rigth := rightStyle.Render(fmt.Sprintf("%s\nIndex Files\n", m.indexList.View()))
 
 	return lipgloss.JoinHorizontal(lipgloss.Center, left, rigth)
 }
 
 func buildModelForDirectory(m *Model, dir string) error {
 	m.currentDir = dir
+
+	// Default focus on file list
+	m.focus = FocusFile
 
 	osFiles, err := os.ReadDir(dir)
 	if err != nil {
@@ -359,7 +410,7 @@ func buildModelForDirectory(m *Model, dir string) error {
 		return a.title < b.title
 	})
 
-	m.fileList = list.New(items, newFileListItemDelegate(), 0, 0)
+	m.fileList = list.New(items, newFileListItemDelegate(m), 0, 0)
 	m.fileList.Title = m.currentDir
 	m.fileList.SetShowHelp(false)
 	m.fileList.SetShowStatusBar(false)
@@ -368,7 +419,7 @@ func buildModelForDirectory(m *Model, dir string) error {
 	m.fileList.DisableQuitKeybindings()
 
 	// Populate indexList with existing .par2 index files
-	m.indexList = list.New(indexItems, newIndexListItemDelegate(), 0, 0)
+	m.indexList = list.New(indexItems, newIndexListItemDelegate(m), 0, 0)
 	m.indexList.Title = "Index Files"
 	m.indexList.SetShowHelp(false)
 	m.indexList.SetShowStatusBar(false)

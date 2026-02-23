@@ -26,6 +26,7 @@ func (i fileListItem) Description() string { return i.desc }
 func (i fileListItem) FilterValue() string { return i.title }
 
 type fileListItemDelegate struct {
+	parent     *Model
 	normal     lipgloss.Style
 	ticked     lipgloss.Style
 	archive    lipgloss.Style
@@ -34,9 +35,10 @@ type fileListItemDelegate struct {
 	processing lipgloss.Style
 }
 
-func newFileListItemDelegate() fileListItemDelegate {
+func newFileListItemDelegate(parent *Model) fileListItemDelegate {
 	common := lipgloss.NewStyle().PaddingLeft(3).PaddingRight(2)
 	return fileListItemDelegate{
+		parent:     parent,
 		normal:     common,
 		ticked:     lipgloss.NewStyle().PaddingLeft(1).PaddingRight(2).Foreground(lipgloss.Color("#BBAA00")),
 		archive:    common.Foreground(lipgloss.Color("#00BB00")),
@@ -76,7 +78,7 @@ func (d fileListItemDelegate) Render(w io.Writer, m list.Model, index int, item 
 	spacer := strings.Repeat(" ", spacer_len)
 	content := title + spacer + it.desc
 
-	if index == m.Index() {
+	if index == m.Index() && d.parent.focus == FocusFile {
 		style = d.selected
 		if it.isDir {
 			style = style.Foreground(lipgloss.Color("15")).Bold(true)

@@ -2,6 +2,8 @@ package main
 
 import (
 	"io"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -18,8 +20,8 @@ const (
 )
 
 type indexListItem struct {
-	par2Filename string    // имя индексного файла с расширением .par2
-	desc         string    // строковое описание статуса
+	par2Filename string
+	desc         string
 	status       JobStatus // processing, ok, damaged
 }
 
@@ -28,19 +30,23 @@ func (i indexListItem) Description() string { return i.desc }
 func (i indexListItem) FilterValue() string { return i.par2Filename }
 
 type indexListItemDelegate struct {
+	parent     *Model
+	selected   lipgloss.Style
 	normal     lipgloss.Style
 	processing lipgloss.Style
 	done       lipgloss.Style
 	damaged    lipgloss.Style
 }
 
-func newIndexListItemDelegate() indexListItemDelegate {
+func newIndexListItemDelegate(parent *Model) indexListItemDelegate {
 	common := lipgloss.NewStyle().PaddingLeft(3).PaddingRight(2)
 	return indexListItemDelegate{
+		parent:     parent,
 		normal:     common,
-		processing: common.Foreground(lipgloss.Color("#FFFF00")), // Жёлтый
-		done:       common.Foreground(lipgloss.Color("#00BB00")), // Зелёный
-		damaged:    common.Foreground(lipgloss.Color("#BB0000")), // Красный
+		selected:   common.Background(lipgloss.Color("#0044FF")).Foreground(lipgloss.Color("#FFFFFF")),
+		processing: common.Foreground(lipgloss.Color("#FFFF00")),
+		done:       common.Foreground(lipgloss.Color("#00BB00")),
+		damaged:    common.Foreground(lipgloss.Color("#BB0000")),
 	}
 }
 
@@ -56,7 +62,19 @@ func (d indexListItemDelegate) Render(w io.Writer, m list.Model, index int, item
 		return
 	}
 
-	content := it.par2Filename + "\n" + it.desc
+	spacer_len := m.Width() - utf8.RuneCountInString(it.par2Filename)
+	if spacer_len <= 0 {
+		spacer_len = 1
+	}
+	spacer := strings.Repeat(" ", spacer_len)
+
+	content := it.par2Filename + spacer + "\n" + it.desc
+
+	if index == m.Index() && d.parent.focus == FocusIndex {
+		style = d.selected
+		io.WriteString(w, style.Render(content))
+		return
+	}
 
 	switch it.status {
 	case JobStatusProcessing:
