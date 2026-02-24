@@ -2,6 +2,7 @@ package main
 
 import (
 	"io"
+	"partui/index"
 	"strings"
 	"unicode/utf8"
 
@@ -10,19 +11,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// JobStatus represents the status of a PAR2 index file
-type JobStatus string
-
-const (
-	JobStatusProcessing JobStatus = "processing"
-	JobStatusOK         JobStatus = "ok"
-	JobStatusDamaged    JobStatus = "damaged"
-)
-
 type indexListItem struct {
 	par2Filename string
 	desc         string
-	status       JobStatus // processing, ok, damaged
+	status       index.Status // processing, ok, damaged
 }
 
 func (i indexListItem) Title() string       { return i.par2Filename }
@@ -50,11 +42,26 @@ func newIndexListItemDelegate(parent *Model) indexListItemDelegate {
 	}
 }
 
+// GetStatusStyle returns the appropriate style for a given status
+func GetStatusStyle(status index.Status) lipgloss.Style {
+	common := lipgloss.NewStyle().PaddingLeft(3).PaddingRight(2)
+	switch status {
+	case index.StatusProcessing:
+		return common.Foreground(lipgloss.Color("#FFFF00"))
+	case index.StatusOK:
+		return common.Foreground(lipgloss.Color("#00BB00"))
+	case index.StatusDamaged:
+		return common.Foreground(lipgloss.Color("#BB0000"))
+	default:
+		return common
+	}
+}
+
 func (d indexListItemDelegate) Height() int                               { return 2 }
 func (d indexListItemDelegate) Spacing() int                              { return 1 }
 func (d indexListItemDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
 
-func (d indexListItemDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+func (d indexListItemDelegate) Render(w io.Writer, m list.Model, idx int, item list.Item) {
 	var style lipgloss.Style
 
 	it, ok := item.(indexListItem)
@@ -70,18 +77,18 @@ func (d indexListItemDelegate) Render(w io.Writer, m list.Model, index int, item
 
 	content := it.par2Filename + spacer + "\n" + it.desc
 
-	if index == m.Index() && d.parent.focus == FocusIndex {
+	if idx == m.Index() && d.parent.focus == FocusIndex {
 		style = d.selected
 		io.WriteString(w, style.Render(content))
 		return
 	}
 
 	switch it.status {
-	case JobStatusProcessing:
+	case index.StatusProcessing:
 		style = d.processing
-	case JobStatusOK:
+	case index.StatusOK:
 		style = d.done
-	case JobStatusDamaged:
+	case index.StatusDamaged:
 		style = d.damaged
 	default:
 		style = d.normal

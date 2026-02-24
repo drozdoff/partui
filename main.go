@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
+	"partui/index"
 	"partui/par2"
 	"path/filepath"
 	"regexp"
@@ -12,12 +14,14 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	gopar "github.com/akalin/gopar/par2"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"go.etcd.io/bbolt"
 )
 
 type Job struct {
@@ -69,6 +73,8 @@ var workers = make(chan struct{}, numProcs)
 var wg sync.WaitGroup
 var program *tea.Program
 var ctx context.Context
+
+var db *bbolt.DB
 
 func (m *Model) Init() tea.Cmd {
 	return tea.SetWindowTitle("Partui")
@@ -131,12 +137,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// UI for config?
 			// TODO: handle change dir during process. file list is now strictly for current dir.
 			if m.filesSelected > 0 {
-				for index, i := range m.fileList.Items() {
+				for idx, i := range m.fileList.Items() {
 					item := i.(fileListItem)
 					if item.selected {
 						item.processing = true
 						item.selected = false
-						m.fileList.SetItem(index, item)
+						m.fileList.SetItem(idx, item)
 						m.addIndex(item.title + ".par2")
 						wg.Add(1)
 						go createParFiles(m.currentDir, item.title, item.size)
@@ -194,11 +200,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case processingFinishedMsg:
 		title := msg.title
-		index, item := findListItem(m.fileList.Items(), title, func(fi fileListItem) string { return fi.title })
-		if index != -1 {
+		iIdx, item := findListItem(m.fileList.Items(), title, func(fi fileListItem) string { return fi.title })
+		if iIdx != -1 {
 			item.processing = false
 			item.archive = true
-			m.fileList.SetItem(index, item)
+			m.fileList.SetItem(iIdx, item)
 			m.fileList, cmd = m.fileList.Update(msg)
 			m.fileList.StopSpinner()
 		}
@@ -208,8 +214,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		iiIndex, _ := findListItem(indexItems, title+".par2", func(ii indexListItem) string { return ii.par2Filename })
 		if iiIndex != -1 {
 			ii := indexItems[iiIndex].(indexListItem)
-			ii.desc = "OK"
-			ii.status = JobStatusOK
+			ii.desc = index.StatusDisplay(index.StatusOK)
+			ii.status = index.StatusOK
 			indexItems[iiIndex] = ii
 			m.indexList.SetItems(indexItems)
 		}
@@ -218,10 +224,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case processingErrorMsg:
 		// TODO: Log processing error
 		title := msg.title
-		index, item := findListItem(m.fileList.Items(), title, func(fi fileListItem) string { return fi.title })
-		if index != -1 {
+		idx, item := findListItem(m.fileList.Items(), title, func(fi fileListItem) string { return fi.title })
+		if idx != -1 {
 			item.processing = false
-			m.fileList.SetItem(index, item)
+			m.fileList.SetItem(idx, item)
 			m.fileList, cmd = m.fileList.Update(msg)
 			return m, cmd
 		}
@@ -231,8 +237,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		iiIndex, _ := findListItem(indexItems, title+".par2", func(ii indexListItem) string { return ii.par2Filename })
 		if iiIndex != -1 {
 			ii := indexItems[iiIndex].(indexListItem)
-			ii.desc = "Damaged"
-			ii.status = JobStatusDamaged
+			ii.desc = index.StatusDisplay(index.StatusDamaged)
+			ii.status = index.StatusDamaged
 			indexItems[iiIndex] = ii
 			m.indexList.SetItems(indexItems)
 		}
@@ -265,8 +271,8 @@ func (m *Model) addIndex(par2Filename string) {
 	indexItems := m.indexList.Items()
 	indexItems = append(indexItems, indexListItem{
 		par2Filename: par2Filename,
-		desc:         "Processing...",
-		status:       JobStatusProcessing,
+		desc:         index.StatusDisplay(index.StatusProcessing),
+		status:       index.StatusProcessing,
 	})
 	m.indexList.SetItems(indexItems)
 }
@@ -470,10 +476,26 @@ func processIndexFiles(m *Model, files []os.DirEntry) []list.Item {
 				continue
 			}
 			m.archived = append(m.archived, archived...)
+
+			// Save to database if available
+			if db != nil {
+				exists, _, err := index.Exists(db, m.currentDir, name)
+				if err != nil {
+					log.Printf("Warning: failed to check index in database: %v", err)
+				} else if exists {
+
+				} else {
+					err = index.PutIndex(db, m.currentDir, name, index.StatusOK, time.Now())
+					if err != nil {
+						log.Printf("Warning: failed to save index to database: %v", err)
+					}
+				}
+			}
+
 			indexItems = append(indexItems, indexListItem{
 				par2Filename: name,
-				desc:         "OK",
-				status:       JobStatusOK,
+				desc:         index.StatusDisplay(index.StatusOK),
+				status:       index.StatusOK,
 			})
 
 		}
@@ -484,6 +506,15 @@ func processIndexFiles(m *Model, files []os.DirEntry) []list.Item {
 func main() {
 	name, err := filepath.Abs(os.Args[0])
 	printShowStopper(err)
+
+	// Initialize the index database
+	db, err = index.OpenDB(index.GetDBPath())
+	defer index.CloseDB(db)
+
+	if err != nil {
+		log.Printf("Warning: failed to open index database: %v", err)
+		db = nil
+	}
 
 	m := Model{}
 
