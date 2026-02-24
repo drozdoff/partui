@@ -65,7 +65,7 @@ func TestOpenDB_CreatesBuckets(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestExists(t *testing.T) {
+func TestGetIndex(t *testing.T) {
 	// Create a temporary database
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test.db")
@@ -74,52 +74,48 @@ func TestExists(t *testing.T) {
 	defer CloseDB(db)
 
 	// Test case 1: Non-existent path should return false
-	exists, primaryKey, err := Exists(db, "/some/dir", "nonexistent.txt")
+	descriptor, err := GetIndex(db, "/some/dir", "nonexistent.txt")
 	assert.NoError(t, err)
-	assert.False(t, exists)
-	assert.Nil(t, primaryKey)
+	assert.Nil(t, descriptor)
 
 	// Add an index entry
 	dir := "/test/dir"
 	filename := "testfile.txt"
-	lastVerified := time.Now()
+	lastVerified := time.Now().Truncate(time.Second)
 	err = PutIndex(db, dir, filename, StatusOK, lastVerified)
 	require.NoError(t, err)
 
-	// Test case 2: Existing path should return true and primary key
-	exists, primaryKey, err = Exists(db, dir, filename)
+	// Test case 2: Existing path should return descriptor
+	descriptor, err = GetIndex(db, dir, filename)
 	assert.NoError(t, err)
-	assert.True(t, exists)
-	assert.NotNil(t, primaryKey)
+	assert.NotNil(t, descriptor)
+	assert.Equal(t, StatusOK, descriptor.Status)
+	assert.Equal(t, lastVerified, descriptor.LastVerified)
 
 	// Test case 3: Wrong directory should return false
-	exists, primaryKey, err = Exists(db, "/wrong/dir", filename)
+	descriptor, err = GetIndex(db, "/wrong/dir", filename)
 	assert.NoError(t, err)
-	assert.False(t, exists)
-	assert.Nil(t, primaryKey)
+	assert.Nil(t, descriptor)
 
 	// Test case 4: Wrong filename should return false
-	exists, primaryKey, err = Exists(db, dir, "wrongfile.txt")
+	descriptor, err = GetIndex(db, dir, "wrongfile.txt")
 	assert.NoError(t, err)
-	assert.False(t, exists)
-	assert.Nil(t, primaryKey)
+	assert.Nil(t, descriptor)
 
 	// Test case 5: Update existing entry and check that Exists returns new key
 	newLastVerified := time.Now().Add(time.Hour)
 	err = PutIndex(db, dir, filename, StatusDamaged, newLastVerified)
 	require.NoError(t, err)
 
-	exists, primaryKey, err = Exists(db, dir, filename)
+	descriptor, err = GetIndex(db, dir, filename)
 	assert.NoError(t, err)
-	assert.True(t, exists)
-	assert.NotNil(t, primaryKey)
+	assert.NotNil(t, descriptor)
 
 	// Verify the key contains the new timestamp
-	parsed := parsePrimaryKey(primaryKey)
-	assert.Equal(t, StatusDamaged, parsed.Status)
+	assert.Equal(t, StatusDamaged, descriptor.Status)
 }
 
-func TestExists_EmptyDB(t *testing.T) {
+func TestGetIndex_EmptyDB(t *testing.T) {
 	// Create a temporary database with no data
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "empty.db")
@@ -129,13 +125,12 @@ func TestExists_EmptyDB(t *testing.T) {
 	defer CloseDB(db)
 
 	// Any query on empty DB should return false
-	exists, primaryKey, err := Exists(db, "/any", "file.txt")
+	descriptor, err := GetIndex(db, "/any", "file.txt")
 	assert.NoError(t, err)
-	assert.False(t, exists)
-	assert.Nil(t, primaryKey)
+	assert.Nil(t, descriptor)
 }
 
-func TestExists_MultipleFiles(t *testing.T) {
+func TestGetIndex_MultipleFiles(t *testing.T) {
 	// Create a temporary database
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test.db")
@@ -155,18 +150,18 @@ func TestExists_MultipleFiles(t *testing.T) {
 
 	// Verify all files exist
 	for _, f := range files {
-		exists, _, err := Exists(db, dir, f)
+		descriptor, err := GetIndex(db, dir, f)
 		assert.NoError(t, err)
-		assert.True(t, exists, "file %s should exist", f)
+		assert.NotNil(t, descriptor, "file %s should exist", f)
 	}
 
 	// Verify non-existent file doesn't exist
-	exists, _, err := Exists(db, dir, "nonexistent.txt")
+	descriptor, err := GetIndex(db, dir, "nonexistent.txt")
 	assert.NoError(t, err)
-	assert.False(t, exists)
+	assert.Nil(t, descriptor)
 }
 
-func TestExists_DifferentDirectories(t *testing.T) {
+func TestGetIndex_DifferentDirectories(t *testing.T) {
 	// Create a temporary database
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test.db")
@@ -204,8 +199,12 @@ func TestExists_DifferentDirectories(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		exists, _, err := Exists(db, tc.dir, tc.filename)
+		descriptor, err := GetIndex(db, tc.dir, tc.filename)
 		assert.NoError(t, err)
-		assert.Equal(t, tc.exists, exists, "dir=%s, file=%s", tc.dir, tc.filename)
+		if tc.exists {
+			assert.NotNil(t, descriptor, "dir=%s, file=%s", tc.dir, tc.filename)
+		} else {
+			assert.Nil(t, descriptor, "dir=%s, file=%s", tc.dir, tc.filename)
+		}
 	}
 }

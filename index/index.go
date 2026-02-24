@@ -136,8 +136,8 @@ func PutIndex(db *bbolt.DB, dir, filename string, status Status, lastVerified ti
 	})
 }
 
-// Exists checks if a record exists by dir+filename
-func Exists(db *bbolt.DB, dir, filename string) (bool, []byte, error) {
+// GetIndex retrieves an IndexDescriptor by dir+filename
+func GetIndex(db *bbolt.DB, dir, filename string) (*IndexDescriptor, error) {
 	lookupKey := GenerateLookupKey(dir, filename)
 	var primaryKey []byte
 
@@ -147,7 +147,16 @@ func Exists(db *bbolt.DB, dir, filename string) (bool, []byte, error) {
 		return nil
 	})
 
-	return primaryKey != nil, primaryKey, err
+	if err != nil {
+		return nil, err
+	}
+
+	if primaryKey == nil {
+		return nil, nil
+	}
+
+	descriptor := parsePrimaryKey(primaryKey)
+	return &descriptor, nil
 }
 
 // All retrieves all IndexDescriptors

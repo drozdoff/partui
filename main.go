@@ -159,11 +159,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.fileList.StartSpinner()
 		case "v":
-			// Only work in file list
-			if m.focus != FocusFile {
+			// Only work in index list
+			if m.focus != FocusIndex {
 				return m, nil
 			}
-			item := m.fileList.SelectedItem().(fileListItem)
+			item := m.indexList.SelectedItem().(indexListItem)
+			item.status = index.StatusProcessing
+			m.indexList.SetItem(m.indexList.Index(), item)
+			m.indexList.CursorDown()
 			verifyParFiles(m, item)
 		// TODO: repair damaged files
 		case "enter":
@@ -311,28 +314,27 @@ func createParFiles(dir string, title string, size uint64) {
 	program.Send(processingFinishedMsg{dir: dir, title: title})
 }
 
-func verifyParFiles(m *Model, item fileListItem) {
+func verifyParFiles(m *Model, item indexListItem) {
 	// TODO: propper logging
-	// TODO: how to manage existing par2 index files with different names?
-	parPath := m.currentDir + "/" + item.title + ".par2"
+	parPath := m.currentDir + "/" + item.par2Filename
 	options := gopar.VerifyOptions{
 		NumGoroutines:  numProcs,
 		VerifyDelegate: &par2.FilenameCollector{},
 	}
 	res, err := gopar.Verify(parPath, options)
 	if err != nil {
-		m.fileList.NewStatusMessage(item.title + " can not be verified")
+		m.fileList.NewStatusMessage(item.par2Filename + " can not be verified")
 		return
 	}
 
 	if res.ShardCounts.RepairNeeded() {
-		item.damaged = true
-		m.fileList.SetItem(m.fileList.Index(), item)
-		m.fileList.NewStatusMessage(item.title + "is damaged")
+		// item.damaged = true
+		// m.fileList.SetItem(m.fileList.Index(), item)
+		m.fileList.NewStatusMessage(item.par2Filename + "is damaged")
 		return
 	}
 
-	m.fileList.NewStatusMessage(item.title + " is OK")
+	m.fileList.NewStatusMessage(item.par2Filename + " is OK")
 }
 
 func (m *Model) View() string {
@@ -477,13 +479,20 @@ func processIndexFiles(m *Model, files []os.DirEntry) []list.Item {
 			}
 			m.archived = append(m.archived, archived...)
 
+			indexItem := indexListItem{
+				par2Filename: name,
+				desc:         index.StatusDisplay(index.StatusOK),
+				status:       index.StatusOK,
+			}
+
 			// Save to database if available
 			if db != nil {
-				exists, _, err := index.Exists(db, m.currentDir, name)
+				descriptor, err := index.GetIndex(db, m.currentDir, name)
 				if err != nil {
 					log.Printf("Warning: failed to check index in database: %v", err)
-				} else if exists {
-
+				} else if descriptor != nil {
+					indexItem.status = descriptor.Status
+					indexItem.desc = index.StatusDisplay(descriptor.Status)
 				} else {
 					err = index.PutIndex(db, m.currentDir, name, index.StatusOK, time.Now())
 					if err != nil {
@@ -491,12 +500,7 @@ func processIndexFiles(m *Model, files []os.DirEntry) []list.Item {
 					}
 				}
 			}
-
-			indexItems = append(indexItems, indexListItem{
-				par2Filename: name,
-				desc:         index.StatusDisplay(index.StatusOK),
-				status:       index.StatusOK,
-			})
+			indexItems = append(indexItems, indexItem)
 
 		}
 	}
