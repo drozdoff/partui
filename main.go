@@ -24,12 +24,6 @@ import (
 	"go.etcd.io/bbolt"
 )
 
-type Job struct {
-	jobType     string
-	name        string
-	description string
-}
-
 type ListFocus string
 
 const (
@@ -49,17 +43,6 @@ type Model struct {
 
 	width  int
 	height int
-}
-
-type processingFinishedMsg struct {
-	dir   string
-	title string
-}
-
-type processingErrorMsg struct {
-	dir   string
-	title string
-	err   error
 }
 
 // TODO: make percentage configurable
@@ -157,7 +140,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				wg.Add(1)
 				go createParFiles(m.currentDir, item.title, item.size)
 			}
-			return m, m.fileList.StartSpinner()
 		case "v":
 			// Only work in index list
 			if m.focus != FocusIndex {
@@ -167,7 +149,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			item.status = index.StatusProcessing
 			m.indexList.SetItem(m.indexList.Index(), item)
 			m.indexList.CursorDown()
-			verifyParFiles(m, item)
+			wg.Add(1)
+			go verifyParFiles(m.currentDir, item)
 		// TODO: repair damaged files
 		case "enter":
 			// Only work in file list
@@ -197,19 +180,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-
-		// Always update fileList for spinner and other messages
-		m.fileList, cmd = m.fileList.Update(msg)
-		return m, cmd
-	case processingFinishedMsg:
+	case parCreateFinishedMsg:
 		title := msg.title
 		iIdx, item := findListItem(m.fileList.Items(), title, func(fi fileListItem) string { return fi.title })
 		if iIdx != -1 {
 			item.processing = false
 			item.archive = true
 			m.fileList.SetItem(iIdx, item)
-			m.fileList, cmd = m.fileList.Update(msg)
-			m.fileList.StopSpinner()
 		}
 
 		// Update indexList - find the entry and mark it as completed
@@ -224,15 +201,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		return m, cmd
-	case processingErrorMsg:
+	case parCreateErrorMsg:
 		// TODO: Log processing error
 		title := msg.title
 		idx, item := findListItem(m.fileList.Items(), title, func(fi fileListItem) string { return fi.title })
 		if idx != -1 {
 			item.processing = false
 			m.fileList.SetItem(idx, item)
-			m.fileList, cmd = m.fileList.Update(msg)
-			return m, cmd
 		}
 
 		// Update indexList - mark entry as damaged
@@ -244,6 +219,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ii.status = index.StatusDamaged
 			indexItems[iiIndex] = ii
 			m.indexList.SetItems(indexItems)
+		}
+	case indexVerifyFinishedMsg:
+		title := msg.par2Filename
+		idx, item := findListItem(m.indexList.Items(), title, func(fi indexListItem) string { return fi.par2Filename })
+		if idx != -1 {
+			item.status = msg.status
+			item.desc = index.StatusDisplay(msg.status)
+			m.indexList.SetItem(idx, item)
 		}
 	case spinner.TickMsg:
 		m.fileList, cmd = m.fileList.Update(msg)
@@ -307,34 +290,52 @@ func createParFiles(dir string, title string, size uint64) {
 
 	err := gopar.Create(parPath, []string{filePath}, options)
 	if err != nil {
-		program.Send(processingErrorMsg{dir: dir, title: title, err: err})
+		program.Send(parCreateErrorMsg{dir: dir, title: title, err: err})
 		return
 	}
 
-	program.Send(processingFinishedMsg{dir: dir, title: title})
+	program.Send(parCreateFinishedMsg{dir: dir, title: title})
 }
 
-func verifyParFiles(m *Model, item indexListItem) {
+func verifyParFiles(dir string, item indexListItem) {
+	workers <- struct{}{}
+	defer func() {
+		<-workers
+		wg.Done()
+	}()
+
+	// don't start a new file if program exited
+	select {
+	case <-ctx.Done():
+		return
+	default:
+		// do nothing
+	}
+
 	// TODO: propper logging
-	parPath := m.currentDir + "/" + item.par2Filename
+	parPath := dir + "/" + item.par2Filename
 	options := gopar.VerifyOptions{
 		NumGoroutines:  numProcs,
 		VerifyDelegate: &par2.FilenameCollector{},
 	}
 	res, err := gopar.Verify(parPath, options)
+
+	msg := indexVerifyFinishedMsg{
+		dir:          dir,
+		par2Filename: item.par2Filename,
+		status:       index.StatusOK,
+	}
+
 	if err != nil {
-		m.fileList.NewStatusMessage(item.par2Filename + " can not be verified")
-		return
+		// TODO: separate status for not verifiable index files
+		msg.status = index.StatusDamaged
+		msg.err = err
+	} else if res.ShardCounts.RepairNeeded() {
+		msg.status = index.StatusDamaged
 	}
 
-	if res.ShardCounts.RepairNeeded() {
-		// item.damaged = true
-		// m.fileList.SetItem(m.fileList.Index(), item)
-		m.fileList.NewStatusMessage(item.par2Filename + "is damaged")
-		return
-	}
-
-	m.fileList.NewStatusMessage(item.par2Filename + " is OK")
+	program.Send(msg)
+	// m.fileList.NewStatusMessage(item.par2Filename + " is OK")
 }
 
 func (m *Model) View() string {
