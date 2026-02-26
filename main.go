@@ -179,6 +179,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
+		case "pgup", "pgdown", "home", "end":
+			// TODO: only works in file list. Make it focus window dependent
+			m.fileList, cmd = m.fileList.Update(msg)
+			return m, cmd
 		}
 	case parCreateFinishedMsg:
 		title := msg.title
@@ -194,6 +198,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		iiIndex, _ := findListItem(indexItems, title+".par2", func(ii indexListItem) string { return ii.par2Filename })
 		if iiIndex != -1 {
 			ii := indexItems[iiIndex].(indexListItem)
+			index.PutIndex(db, msg.dir, ii.par2Filename, index.StatusOK, time.Now())
 			ii.desc = index.StatusDisplay(index.StatusOK)
 			ii.status = index.StatusOK
 			indexItems[iiIndex] = ii
@@ -222,6 +227,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case indexVerifyFinishedMsg:
 		title := msg.par2Filename
+
+		err := index.PutIndex(db, msg.dir, title, msg.status, time.Now())
+		if err != nil {
+			log.Printf("Warning: failed to save index to database: %v", err)
+		}
+
 		idx, item := findListItem(m.indexList.Items(), title, func(fi indexListItem) string { return fi.par2Filename })
 		if idx != -1 {
 			item.status = msg.status

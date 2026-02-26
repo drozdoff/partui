@@ -208,3 +208,176 @@ func TestGetIndex_DifferentDirectories(t *testing.T) {
 		}
 	}
 }
+
+func TestPutIndex_Basic(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	db, err := OpenDB(dbPath)
+	require.NoError(t, err)
+	defer CloseDB(db)
+
+	dir := "/test/dir"
+	filename := "testfile.txt"
+	lastVerified := time.Now().Truncate(time.Second)
+
+	err = PutIndex(db, dir, filename, StatusOK, lastVerified)
+
+	assert.NoError(t, err)
+
+	// Verify the entry was saved correctly
+	descriptor, err := GetIndex(db, dir, filename)
+	require.NoError(t, err)
+	require.NotNil(t, descriptor)
+	assert.Equal(t, filename, descriptor.Filename)
+	assert.Equal(t, dir, descriptor.Dir)
+	assert.Equal(t, StatusOK, descriptor.Status)
+	assert.Equal(t, lastVerified, descriptor.LastVerified)
+}
+
+func TestPutIndex_UpdateExisting(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	db, err := OpenDB(dbPath)
+	require.NoError(t, err)
+	defer CloseDB(db)
+
+	dir := "/test/dir"
+	filename := "testfile.txt"
+	oldTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.Local)
+	newTime := time.Date(2024, 6, 15, 12, 30, 0, 0, time.Local)
+
+	// Add initial entry
+	err = PutIndex(db, dir, filename, StatusOK, oldTime)
+	require.NoError(t, err)
+
+	// Update with new time and status
+	err = PutIndex(db, dir, filename, StatusDamaged, newTime)
+	require.NoError(t, err)
+
+	// Verify only the new entry exists
+	descriptor, err := GetIndex(db, dir, filename)
+	require.NoError(t, err)
+	require.NotNil(t, descriptor)
+	assert.Equal(t, StatusDamaged, descriptor.Status)
+	assert.Equal(t, newTime.Unix(), descriptor.LastVerified.Unix())
+
+	// Verify only one entry exists in the database
+	all, err := All(db)
+	require.NoError(t, err)
+	assert.Len(t, all, 1)
+}
+
+func TestPutIndex_DifferentStatuses(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	db, err := OpenDB(dbPath)
+	require.NoError(t, err)
+	defer CloseDB(db)
+
+	dir := "/test/dir"
+	filename := "testfile.txt"
+	lastVerified := time.Now()
+
+	testCases := []struct {
+		status   Status
+		expected Status
+	}{
+		{StatusOK, StatusOK},
+		{StatusProcessing, StatusProcessing},
+		{StatusDamaged, StatusDamaged},
+	}
+
+	for _, tc := range testCases {
+		err = PutIndex(db, dir, filename, tc.status, lastVerified)
+		require.NoError(t, err)
+
+		descriptor, err := GetIndex(db, dir, filename)
+		require.NoError(t, err)
+		require.NotNil(t, descriptor)
+		assert.Equal(t, tc.expected, descriptor.Status, "Status should be %s", StatusDisplay(tc.status))
+	}
+}
+
+func TestPutIndex_MultipleFilesSameDir(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	db, err := OpenDB(dbPath)
+	require.NoError(t, err)
+	defer CloseDB(db)
+
+	dir := "/test/dir"
+	files := []string{"file1.txt", "file2.txt", "file3.txt"}
+
+	for i, f := range files {
+		lastVerified := time.Now().Add(time.Duration(i) * time.Hour)
+		err = PutIndex(db, dir, f, StatusOK, lastVerified)
+		require.NoError(t, err)
+	}
+
+	// Verify all files exist
+	all, err := All(db)
+	require.NoError(t, err)
+	assert.Len(t, all, len(files))
+
+	// Verify each file can be retrieved
+	for _, f := range files {
+		descriptor, err := GetIndex(db, dir, f)
+		require.NoError(t, err)
+		require.NotNil(t, descriptor, "file %s should exist", f)
+	}
+}
+
+func TestPutIndex_EmptyDirAndFilename(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	db, err := OpenDB(dbPath)
+	require.NoError(t, err)
+	defer CloseDB(db)
+
+	dir := ""
+	filename := "testfile.txt"
+	lastVerified := time.Now()
+
+	err = PutIndex(db, dir, filename, StatusOK, lastVerified)
+	require.NoError(t, err)
+
+	descriptor, err := GetIndex(db, dir, filename)
+	require.NoError(t, err)
+	require.NotNil(t, descriptor)
+	assert.Equal(t, filename, descriptor.Filename)
+	assert.Equal(t, dir, descriptor.Dir)
+}
+
+func TestPutIndex_DifferentDirectories(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	db, err := OpenDB(dbPath)
+	require.NoError(t, err)
+	defer CloseDB(db)
+
+	files := []struct {
+		dir      string
+		filename string
+	}{
+		{"/dir1", "file.txt"},
+		{"/dir2", "file.txt"},
+		{"/dir1", "other.txt"},
+		{"", "empty.txt"},
+	}
+
+	for _, f := range files {
+		err = PutIndex(db, f.dir, f.filename, StatusOK, time.Now())
+		require.NoError(t, err)
+	}
+
+	// Verify all unique paths exist
+	all, err := All(db)
+	require.NoError(t, err)
+	assert.Len(t, all, len(files))
+}
