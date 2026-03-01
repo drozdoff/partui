@@ -31,9 +31,23 @@ const (
 	FocusIndex ListFocus = "index"
 )
 
+// BottomPanel displays index statistics at the bottom of the UI
+type BottomPanel struct {
+	totalCount      int
+	processingCount int
+	damagedItems    []DamagedIndex
+}
+
+// DamagedIndex represents a damaged index file
+type DamagedIndex struct {
+	par2Filename string
+	dir          string
+}
+
 type Model struct {
-	fileList  list.Model
-	indexList list.Model
+	fileList    list.Model
+	indexList   list.Model
+	bottomPanel BottomPanel
 
 	currentDir    string
 	filesSelected int
@@ -70,7 +84,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		// size list to fit inside the bordered box from View()
 
 		m.indexList.Update(msg)
 		m.fileList, cmd = m.fileList.Update(msg)
@@ -149,6 +162,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			item.status = index.StatusProcessing
 			m.indexList.SetItem(m.indexList.Index(), item)
 			m.indexList.CursorDown()
+			index.PutIndex(db, m.currentDir, item.par2Filename, index.StatusProcessing, time.Now())
+			m.bottomPanel = calculateBottomPanelStats(db)
 			wg.Add(1)
 			go verifyParFiles(m.currentDir, item)
 		// TODO: repair damaged files
@@ -205,6 +220,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.indexList.SetItems(indexItems)
 		}
 
+		// Update bottom panel statistics
+		m.bottomPanel = calculateBottomPanelStats(db)
+
 		return m, cmd
 	case parCreateErrorMsg:
 		// TODO: Log processing error
@@ -220,11 +238,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		iiIndex, _ := findListItem(indexItems, title+".par2", func(ii indexListItem) string { return ii.par2Filename })
 		if iiIndex != -1 {
 			ii := indexItems[iiIndex].(indexListItem)
+			index.PutIndex(db, msg.dir, ii.par2Filename, index.StatusDamaged, time.Now())
 			ii.desc = index.StatusDisplay(index.StatusDamaged)
 			ii.status = index.StatusDamaged
 			indexItems[iiIndex] = ii
 			m.indexList.SetItems(indexItems)
 		}
+
+		// Update bottom panel statistics
+		m.bottomPanel = calculateBottomPanelStats(db)
+
 	case indexVerifyFinishedMsg:
 		title := msg.par2Filename
 
@@ -239,6 +262,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			item.desc = index.StatusDisplay(msg.status)
 			m.indexList.SetItem(idx, item)
 		}
+
+		// Update bottom panel statistics
+		m.bottomPanel = calculateBottomPanelStats(db)
+
 	case spinner.TickMsg:
 		m.fileList, cmd = m.fileList.Update(msg)
 		return m, cmd
@@ -272,6 +299,56 @@ func (m *Model) addIndex(par2Filename string) {
 		status:       index.StatusProcessing,
 	})
 	m.indexList.SetItems(indexItems)
+}
+
+// calculateBottomPanelStats computes statistics for the bottom panel
+func calculateBottomPanelStats(db *bbolt.DB) BottomPanel {
+	if db == nil {
+		return BottomPanel{}
+	}
+
+	// Get total count
+	totalCount, err := index.CountAll(db)
+	if err != nil {
+		log.Printf("Warning: failed to count indexes: %v", err)
+		return BottomPanel{}
+	}
+
+	// Get damaged items
+	damagedItems, err := index.GetDamaged(db)
+	if err != nil {
+		log.Printf("Warning: failed to get damaged indexes: %v", err)
+		return BottomPanel{}
+	}
+
+	// Get all indexes to count processing ones
+	allIndexes, err := index.All(db)
+	if err != nil {
+		log.Printf("Warning: failed to get all indexes: %v", err)
+		return BottomPanel{}
+	}
+
+	processingCount := 0
+	for _, idx := range allIndexes {
+		if idx.Status == index.StatusProcessing {
+			processingCount++
+		}
+	}
+
+	// Convert to DamagedIndex format
+	damaged := make([]DamagedIndex, len(damagedItems))
+	for i, d := range damagedItems {
+		damaged[i] = DamagedIndex{
+			par2Filename: d.Filename,
+			dir:          d.Dir,
+		}
+	}
+
+	return BottomPanel{
+		totalCount:      totalCount,
+		processingCount: processingCount,
+		damagedItems:    damaged,
+	}
 }
 
 func createParFiles(dir string, title string, size uint64) {
@@ -353,7 +430,7 @@ func (m *Model) View() string {
 	style := lipgloss.NewStyle()
 
 	w := m.width / 2
-	h := m.height - 6
+	h := m.height
 	if h < 0 {
 		h = 0
 	}
@@ -366,14 +443,51 @@ func (m *Model) View() string {
 	// Apply focus styling to borders
 	leftStyle := style
 	rightStyle := style
-	// if m.focus == FocusFile {
-	// } else {
-	// }
 
-	left := leftStyle.Render(fmt.Sprintf("%s\nPress Tab to switch focus, Ctrl+C or q to quit\n", m.fileList.View()))
-	rigth := rightStyle.Render(fmt.Sprintf("%s\nIndex Files\n", m.indexList.View()))
+	left := leftStyle.Render(m.fileList.View())
+	right := rightStyle.Render(m.indexList.View())
 
-	return lipgloss.JoinHorizontal(lipgloss.Center, left, rigth)
+	lists := lipgloss.JoinHorizontal(lipgloss.Center, left, right)
+
+	// Add bottom panel
+	bottomPanel := m.bottomPanel.View(m.width)
+
+	return lipgloss.JoinVertical(lipgloss.Left, lists, bottomPanel)
+}
+
+// View renders the bottom panel
+func (bp BottomPanel) View(width int) string {
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#AAAAAA")).
+		Background(lipgloss.Color("#1a1a1a")).
+		Padding(0, 1)
+
+	// Format statistics line
+	statsLine := fmt.Sprintf(
+		"Total: %d | Verifying: %d | Damaged: %d",
+		bp.totalCount,
+		bp.processingCount,
+		len(bp.damagedItems),
+	)
+
+	// Build damaged files list (truncated if too long)
+	damagedLine := ""
+	if len(bp.damagedItems) > 0 {
+		damagedNames := make([]string, 0, len(bp.damagedItems))
+		for _, d := range bp.damagedItems {
+			damagedNames = append(damagedNames, d.dir+"/"+d.par2Filename)
+		}
+		damagedLine = " | Damaged: " + strings.Join(damagedNames, ", ")
+	}
+
+	content := statsLine + damagedLine
+
+	// Truncate to fit width
+	if width > 3 && len(content) > width {
+		content = content[:width-3] + "..."
+	}
+
+	return style.Width(width).Render(content)
 }
 
 func buildModelForDirectory(m *Model, dir string) error {
@@ -446,6 +560,9 @@ func buildModelForDirectory(m *Model, dir string) error {
 	m.indexList.SetFilterState(list.Unfiltered)
 	m.indexList.SetShowPagination(false)
 	m.indexList.DisableQuitKeybindings()
+
+	// Initialize bottom panel statistics
+	m.bottomPanel = calculateBottomPanelStats(db)
 
 	return nil
 }
