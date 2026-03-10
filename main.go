@@ -62,6 +62,11 @@ type Model struct {
 // TODO: make percentage configurable
 const percentage = 5
 
+// ReverifyThreshold defines how old an index must be to require re-verification on startup
+// Default: 30 days (can be changed here or made configurable)
+// const ReverifyThreshold = 30 * 24 * time.Hour
+const ReverifyThreshold = 5 * 24 * time.Hour
+
 var numProcs = runtime.GOMAXPROCS(-1)
 
 // counting semaphore for any kind of workers
@@ -225,7 +230,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, cmd
 	case parCreateErrorMsg:
-		// TODO: Log processing error
+		if msg.err != nil {
+			log.Printf("Warning: failed to verify %s: %v", msg.title, msg.err)
+		}
+
 		title := msg.title
 		idx, item := findListItem(m.fileList.Items(), title, func(fi fileListItem) string { return fi.title })
 		if idx != -1 {
@@ -249,6 +257,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.bottomPanel = calculateBottomPanelStats(db)
 
 	case indexVerifyFinishedMsg:
+		if msg.err != nil {
+			log.Printf("Warning: failed to verify %s: %v", msg.par2Filename, msg.err)
+		}
+
 		title := msg.par2Filename
 
 		err := index.PutIndex(db, msg.dir, title, msg.status, time.Now())
@@ -423,7 +435,6 @@ func verifyParFiles(dir string, item indexListItem) {
 	}
 
 	program.Send(msg)
-	// m.fileList.NewStatusMessage(item.par2Filename + " is OK")
 }
 
 func (m *Model) View() string {
@@ -657,6 +668,31 @@ func main() {
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithCancel(context.Background())
 	program = tea.NewProgram(&m, tea.WithAltScreen(), tea.WithContext(ctx))
+
+	// Reverify old indexes BEFORE starting the UI
+	// This runs in the main thread as required
+	if db != nil {
+		threshold := time.Now().Add(-ReverifyThreshold)
+		oldIndexes, err := index.GetOldIndexes(db, threshold)
+		if err != nil {
+			log.Printf("Warning: failed to get old indexes: %v", err)
+		} else if len(oldIndexes) > 0 {
+			log.Printf("Found %d indexes requiring re-verification", len(oldIndexes))
+
+			// Start verify workers for old indexes
+			for _, idx := range oldIndexes {
+				// set old indexes status to processing
+				index.PutIndex(db, idx.Dir, idx.Filename, index.StatusProcessing, idx.LastVerified)
+
+				// start verify goroutine
+				wg.Add(1)
+				go verifyParFiles(idx.Dir, indexListItem{
+					par2Filename: idx.Filename,
+				})
+			}
+			m.bottomPanel = calculateBottomPanelStats(db)
+		}
+	}
 
 	_, err = program.Run()
 	cancel()

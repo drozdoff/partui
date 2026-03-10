@@ -258,3 +258,30 @@ func parsePrimaryKey(key []byte) IndexDescriptor {
 		LastVerified: time.Unix(int64(ts), 0),
 	}
 }
+
+// GetOldIndexes returns all index descriptors that were verified before the given threshold
+// Uses efficient primary key scan since timestamp is the first part of the key
+// Key format: [8 bytes big-endian timestamp][1 byte status][dir/filename]
+func GetOldIndexes(db *bbolt.DB, threshold time.Time) ([]IndexDescriptor, error) {
+	var result []IndexDescriptor
+
+	thresholdTs := uint64(threshold.Unix())
+
+	err := db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(bucketName(BucketIndexes))
+
+		cursor := b.Cursor()
+
+		// Iterate from the beginning up to threshold key
+		for k, _ := cursor.First(); k != nil; k, _ = cursor.Next() {
+			// Stop when we pass the threshold
+			if len(k) >= 8 && binary.BigEndian.Uint64(k[:8]) >= thresholdTs {
+				break
+			}
+			result = append(result, parsePrimaryKey(k))
+		}
+		return nil
+	})
+
+	return result, err
+}

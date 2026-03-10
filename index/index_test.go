@@ -381,3 +381,140 @@ func TestPutIndex_DifferentDirectories(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, all, len(files))
 }
+
+func TestGetOldIndexes_Basic(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	db, err := OpenDB(dbPath)
+	require.NoError(t, err)
+	defer CloseDB(db)
+
+	now := time.Now()
+	oldTime := now.Add(-60 * 24 * time.Hour) // 60 days ago
+
+	dir := "/test/dir"
+
+	// Add old index (should be returned)
+	err = PutIndex(db, dir, "old.txt", StatusOK, oldTime)
+	require.NoError(t, err)
+
+	// Add recent index (should NOT be returned)
+	err = PutIndex(db, dir, "recent.txt", StatusOK, now)
+	require.NoError(t, err)
+
+	// Query for indexes older than 30 days
+	threshold := now.Add(-30 * 24 * time.Hour)
+	oldIndexes, err := GetOldIndexes(db, threshold)
+	require.NoError(t, err)
+
+	assert.Len(t, oldIndexes, 1)
+	assert.Equal(t, "old.txt", oldIndexes[0].Filename)
+}
+
+func TestGetOldIndexes_EmptyDB(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "empty.db")
+
+	db, err := OpenDB(dbPath)
+	require.NoError(t, err)
+	defer CloseDB(db)
+
+	threshold := time.Now()
+	oldIndexes, err := GetOldIndexes(db, threshold)
+	require.NoError(t, err)
+
+	assert.Empty(t, oldIndexes)
+}
+
+func TestGetOldIndexes_AllIndexesOld(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	db, err := OpenDB(dbPath)
+	require.NoError(t, err)
+	defer CloseDB(db)
+
+	oldTime := time.Now().Add(-60 * 24 * time.Hour)
+	dir := "/test/dir"
+	files := []string{"file1.txt", "file2.txt", "file3.txt"}
+
+	for _, f := range files {
+		err = PutIndex(db, dir, f, StatusOK, oldTime)
+		require.NoError(t, err)
+	}
+
+	threshold := time.Now().Add(-30 * 24 * time.Hour)
+	oldIndexes, err := GetOldIndexes(db, threshold)
+	require.NoError(t, err)
+
+	assert.Len(t, oldIndexes, 3)
+}
+
+func TestGetOldIndexes_ThresholdExcludesRecent(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	db, err := OpenDB(dbPath)
+	require.NoError(t, err)
+	defer CloseDB(db)
+
+	oldTime := time.Now().Add(-60 * 24 * time.Hour)
+	newTime := time.Now()
+	dir := "/test/dir"
+
+	// Add old index
+	err = PutIndex(db, dir, "old.txt", StatusOK, oldTime)
+	require.NoError(t, err)
+
+	// Add very recent index (1 hour ago - should NOT be old)
+	recentTime := newTime.Add(-1 * time.Hour)
+	err = PutIndex(db, dir, "recent.txt", StatusOK, recentTime)
+	require.NoError(t, err)
+
+	// Threshold is 30 days ago - only old.txt should be returned
+	threshold := newTime.Add(-30 * 24 * time.Hour)
+	oldIndexes, err := GetOldIndexes(db, threshold)
+	require.NoError(t, err)
+
+	// Should only return old.txt (recent.txt is only 1 hour old)
+	assert.Len(t, oldIndexes, 1)
+	assert.Equal(t, "old.txt", oldIndexes[0].Filename)
+}
+
+func TestGetOldIndexes_DifferentDirectories(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	db, err := OpenDB(dbPath)
+	require.NoError(t, err)
+	defer CloseDB(db)
+
+	oldTime := time.Now().Add(-60 * 24 * time.Hour)
+	recentTime := time.Now()
+
+	// Add old indexes in different directories
+	err = PutIndex(db, "/dir1", "file1.txt", StatusOK, oldTime)
+	require.NoError(t, err)
+	err = PutIndex(db, "/dir2", "file2.txt", StatusOK, oldTime)
+	require.NoError(t, err)
+
+	// Add recent index
+	err = PutIndex(db, "/dir3", "file3.txt", StatusOK, recentTime)
+	require.NoError(t, err)
+
+	threshold := time.Now().Add(-30 * 24 * time.Hour)
+	oldIndexes, err := GetOldIndexes(db, threshold)
+	require.NoError(t, err)
+
+	assert.Len(t, oldIndexes, 2)
+
+	// Verify both directories are represented
+	dirs := make(map[string]bool)
+	for _, idx := range oldIndexes {
+		dirs[idx.Dir] = true
+	}
+	assert.True(t, dirs["/dir1"])
+	assert.True(t, dirs["/dir2"])
+	assert.False(t, dirs["/dir3"])
+}
