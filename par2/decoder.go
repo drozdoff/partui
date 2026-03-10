@@ -32,6 +32,7 @@ func ListPar2Filenames(path string) ([]string, error) {
 	}
 	return collector.names, nil
 }
+
 func CalculateBlockSize(fSize uint64, percentage uint64) int {
 
 	// f_size // 2**15
