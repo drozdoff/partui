@@ -14,6 +14,7 @@ package main
 
 import (
 	"log"
+	"os"
 	"partui/index"
 	"path/filepath"
 	"time"
@@ -112,6 +113,53 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.bottomPanel = calculateBottomPanelStats(db)
 			wg.Add(1)
 			go verifyParFiles(m.currentDir, item)
+		case "i":
+			// Expand indexList to show all indexes from database
+			if m.indexListExpanded {
+				// m.focus = FocusFile
+				// TODO: do the same as for Esc
+			} else {
+				m.focus = FocusIndex
+				indexes, err := index.All(db)
+				if err != nil {
+					log.Printf("Warning: failed to load all indexes: %v", err)
+					return m, nil
+				}
+
+				items := make([]list.Item, len(indexes))
+				for i, idx := range indexes {
+					items[i] = indexListItem{
+						par2Filename: idx.Filename,
+						desc:         idx.Dir + " - " + index.StatusDisplay(idx.Status),
+						status:       idx.Status,
+					}
+				}
+
+				m.indexList = list.New(items, newIndexListItemDelegate(m), 0, 0)
+				m.indexList.Title = "All Indexes from Database (Press Esc to return)"
+				m.indexList.SetShowStatusBar(false)
+				m.indexList.SetShowPagination(true)
+				m.indexList.DisableQuitKeybindings()
+
+				m.indexListExpanded = true
+			}
+		case "esc":
+			// Return to local indexes
+			if m.indexListExpanded {
+				osFiles, err := os.ReadDir(m.currentDir)
+				if err != nil {
+					log.Printf("Warning: failed to read directory: %v", err)
+					return m, nil
+				}
+				indexItems := processIndexFiles(m, osFiles)
+
+				m.indexList = list.New(indexItems, newIndexListItemDelegate(m), 0, 0)
+				m.indexList.Title = "Index Files"
+				m.indexList.SetShowPagination(false)
+				m.indexList.DisableQuitKeybindings()
+
+				m.indexListExpanded = false
+			}
 		// TODO: repair damaged files
 		case "enter":
 			// Only work in file list

@@ -53,6 +53,9 @@ type Model struct {
 
 	focus ListFocus
 
+	// indexListExpanded - when true, indexList shows all indexes from DB
+	indexListExpanded bool
+
 	width  int
 	height int
 }

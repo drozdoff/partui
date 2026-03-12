@@ -15,6 +15,14 @@ func (m *Model) Init() tea.Cmd {
 func (m *Model) View() string {
 	style := lipgloss.NewStyle()
 
+	// Expanded mode - show full-screen index list
+	if m.indexListExpanded {
+		m.indexList.SetHeight(m.height)
+		m.indexList.SetWidth(m.width)
+		bottomPanel := m.bottomPanel.View(m.width)
+		return lipgloss.JoinVertical(lipgloss.Left, m.indexList.View(), bottomPanel)
+	}
+
 	w := m.width / 2
 	h := m.height
 	if h < 0 {
