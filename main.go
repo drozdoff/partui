@@ -29,6 +29,24 @@ const (
 	FocusIndex ListFocus = "index"
 )
 
+// formatFileSize converts bytes to human-readable format
+func formatFileSize(bytes uint64) string {
+	const kb = 1024
+	const mb = 1024 * kb
+	const gb = 1024 * mb
+
+	switch {
+	case bytes < kb:
+		return fmt.Sprintf("%d bytes", bytes)
+	case bytes < mb:
+		return fmt.Sprintf("%.2f KB", float64(bytes)/kb)
+	case bytes < gb:
+		return fmt.Sprintf("%.2f MB", float64(bytes)/mb)
+	default:
+		return fmt.Sprintf("%.2f GB", float64(bytes)/gb)
+	}
+}
+
 // BottomPanel displays index statistics at the bottom of the UI
 type BottomPanel struct {
 	totalCount      int
@@ -241,7 +259,7 @@ func buildModelForDirectory(m *Model, dir string) error {
 			title:   title,
 			size:    uint64(fileInfo.Size()),
 			archive: slices.Contains(m.archived, name),
-			desc:    fmt.Sprintf("%d bytes", fileInfo.Size()),
+			desc:    formatFileSize(uint64(fileInfo.Size())),
 			isDir:   file.IsDir(),
 		})
 	}
@@ -262,7 +280,6 @@ func buildModelForDirectory(m *Model, dir string) error {
 	m.fileList.SetShowHelp(false)
 	m.fileList.SetShowStatusBar(false)
 	m.fileList.SetFilterState(list.Unfiltered)
-	m.fileList.SetShowPagination(true)
 	m.fileList.DisableQuitKeybindings()
 
 	// Populate indexList with existing .par2 index files
@@ -271,7 +288,6 @@ func buildModelForDirectory(m *Model, dir string) error {
 	m.indexList.SetShowHelp(false)
 	m.indexList.SetShowStatusBar(false)
 	m.indexList.SetFilterState(list.Unfiltered)
-	m.indexList.SetShowPagination(false)
 	m.indexList.DisableQuitKeybindings()
 
 	// Initialize bottom panel statistics
@@ -310,6 +326,7 @@ func processIndexFiles(m *Model, files []os.DirEntry) []list.Item {
 
 			indexItem := indexListItem{
 				par2Filename: name,
+				dir:          m.currentDir,
 				desc:         index.StatusDisplay(index.StatusOK),
 				status:       index.StatusOK,
 			}

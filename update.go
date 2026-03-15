@@ -109,15 +109,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			item.status = index.StatusProcessing
 			m.indexList.SetItem(m.indexList.Index(), item)
 			m.indexList.CursorDown()
-			index.PutIndex(db, m.currentDir, item.par2Filename, index.StatusProcessing, time.Now())
+
+			index.PutIndex(db, item.dir, item.par2Filename, index.StatusProcessing, time.Now())
 			m.bottomPanel = calculateBottomPanelStats(db)
 			wg.Add(1)
-			go verifyParFiles(m.currentDir, item)
+			go verifyParFiles(item.dir, item)
 		case "i":
 			// Expand indexList to show all indexes from database
 			if m.indexListExpanded {
 				// m.focus = FocusFile
-				// TODO: do the same as for Esc
+				// TODO: i button toggle, do the same as for Esc
 			} else {
 				m.focus = FocusIndex
 				indexes, err := index.All(db)
@@ -130,6 +131,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				for i, idx := range indexes {
 					items[i] = indexListItem{
 						par2Filename: idx.Filename,
+						dir:          idx.Dir,
 						desc:         idx.Dir + " - " + index.StatusDisplay(idx.Status),
 						status:       idx.Status,
 					}
@@ -138,7 +140,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.indexList = list.New(items, newIndexListItemDelegate(m), 0, 0)
 				m.indexList.Title = "All Indexes from Database (Press Esc to return)"
 				m.indexList.SetShowStatusBar(false)
-				m.indexList.SetShowPagination(true)
 				m.indexList.DisableQuitKeybindings()
 
 				m.indexListExpanded = true
@@ -155,7 +156,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				m.indexList = list.New(indexItems, newIndexListItemDelegate(m), 0, 0)
 				m.indexList.Title = "Index Files"
-				m.indexList.SetShowPagination(false)
+				m.indexList.SetShowStatusBar(false)
 				m.indexList.DisableQuitKeybindings()
 
 				m.indexListExpanded = false

@@ -13,6 +13,7 @@ import (
 
 type indexListItem struct {
 	par2Filename string
+	dir          string
 	desc         string
 	status       index.Status // processing, ok, damaged
 }
