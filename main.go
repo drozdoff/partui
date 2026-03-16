@@ -47,6 +47,19 @@ func formatFileSize(bytes uint64) string {
 	}
 }
 
+// formatIndexItemDesc formats the description for an index list item
+func formatIndexItemDesc(item indexListItem, expanded bool) string {
+	size := formatFileSize(item.size)
+	status := index.StatusDisplay(item.status)
+
+	if expanded && !item.lastVerified.IsZero() {
+		// Expanded mode: YYYY.MM.DD HH:MM | /path/to/dir | size | status
+		return item.lastVerified.Format("2006.01.02 15:04") + " | " + item.dir + " | " + size + " | " + status
+	}
+	// Normal mode: /path/to/dir | size | status
+	return item.dir + " | " + size + " | " + status
+}
+
 // BottomPanel displays index statistics at the bottom of the UI
 type BottomPanel struct {
 	totalCount      int
@@ -178,7 +191,7 @@ func createParFiles(dir string, title string, size uint64) {
 		return
 	}
 
-	program.Send(parCreateFinishedMsg{dir: dir, title: title})
+	program.Send(parCreateFinishedMsg{dir: dir, title: title, size: size})
 }
 
 func verifyParFiles(dir string, item indexListItem) {
@@ -208,11 +221,11 @@ func verifyParFiles(dir string, item indexListItem) {
 		dir:          dir,
 		par2Filename: item.par2Filename,
 		status:       index.StatusOK,
+		size:         item.size,
 	}
 
 	if err != nil {
-		// TODO: separate status for not verifiable index files
-		msg.status = index.StatusDamaged
+		msg.status = index.StatusUnverifiable
 		msg.err = err
 	} else if res.ShardCounts.RepairNeeded() {
 		msg.status = index.StatusDamaged
@@ -324,11 +337,19 @@ func processIndexFiles(m *Model, files []os.DirEntry) []list.Item {
 			}
 			m.archived = append(m.archived, archived...)
 
+			// Get file info for size
+			fileInfo, err := file.Info()
+			if err != nil {
+				log.Printf("Warning: failed to get file info: %v", err)
+				continue
+			}
+			fileSize := uint64(fileInfo.Size())
+
 			indexItem := indexListItem{
 				par2Filename: name,
 				dir:          m.currentDir,
-				desc:         index.StatusDisplay(index.StatusOK),
 				status:       index.StatusOK,
+				size:         fileSize,
 			}
 
 			// Save to database if available
@@ -338,18 +359,44 @@ func processIndexFiles(m *Model, files []os.DirEntry) []list.Item {
 					log.Printf("Warning: failed to check index in database: %v", err)
 				} else if descriptor != nil {
 					indexItem.status = descriptor.Status
-					indexItem.desc = index.StatusDisplay(descriptor.Status)
+					indexItem.lastVerified = descriptor.LastVerified
+					indexItem.size = descriptor.Size
 				} else {
-					err = index.PutIndex(db, m.currentDir, name, index.StatusOK, time.Now())
+					now := time.Now()
+					err = index.PutIndex(db, m.currentDir, name, index.StatusOK, now, fileSize)
 					if err != nil {
 						log.Printf("Warning: failed to save index to database: %v", err)
+					} else {
+						indexItem.lastVerified = now
 					}
 				}
 			}
+
+			// Format description based on mode
+			indexItem.desc = formatIndexItemDesc(indexItem, m.indexListExpanded)
+
 			indexItems = append(indexItems, indexItem)
 
 		}
 	}
+
+	// Sort: damaged first, then by lastVerified ascending
+	sort.Slice(indexItems, func(i, j int) bool {
+		a := indexItems[i].(indexListItem)
+		b := indexItems[j].(indexListItem)
+
+		// Damaged files first
+		if a.status == index.StatusDamaged && b.status != index.StatusDamaged {
+			return true
+		}
+		if b.status == index.StatusDamaged && a.status != index.StatusDamaged {
+			return false
+		}
+
+		// All others by lastVerified ascending (older first)
+		return a.lastVerified.Before(b.lastVerified)
+	})
+
 	return indexItems
 }
 
@@ -388,7 +435,7 @@ func main() {
 			// Start verify workers for old indexes
 			for _, idx := range oldIndexes {
 				// set old indexes status to processing
-				index.PutIndex(db, idx.Dir, idx.Filename, index.StatusProcessing, idx.LastVerified)
+				index.PutIndex(db, idx.Dir, idx.Filename, index.StatusProcessing, idx.LastVerified, idx.Size)
 
 				// start verify goroutine
 				wg.Add(1)

@@ -7,6 +7,7 @@ import "partui/index"
 type parCreateFinishedMsg struct {
 	dir   string
 	title string
+	size  uint64
 }
 
 type parCreateErrorMsg struct {
@@ -19,5 +20,6 @@ type indexVerifyFinishedMsg struct {
 	dir          string
 	par2Filename string
 	status       index.Status
+	size         uint64
 	err          error
 }

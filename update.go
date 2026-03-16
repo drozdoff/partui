@@ -76,8 +76,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			// TODO: Now one index file per selected file is default.
-			// override this behaviour in config??? specify index file name for a list of files?
-			// UI for config?
+			// override this behaviour in config??? how to specify index file name for a list of files???
+			// needs some UI for config?
 			// TODO: handle change dir during process. file list is now strictly for current dir.
 			if m.filesSelected > 0 {
 				for idx, i := range m.fileList.Items() {
@@ -107,10 +107,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			item := m.indexList.SelectedItem().(indexListItem)
 			item.status = index.StatusProcessing
+			item.desc = formatIndexItemDesc(item, m.indexListExpanded)
 			m.indexList.SetItem(m.indexList.Index(), item)
 			m.indexList.CursorDown()
 
-			index.PutIndex(db, item.dir, item.par2Filename, index.StatusProcessing, time.Now())
+			index.PutIndex(db, item.dir, item.par2Filename, index.StatusProcessing, time.Now(), item.size)
 			m.bottomPanel = calculateBottomPanelStats(db)
 			wg.Add(1)
 			go verifyParFiles(item.dir, item)
@@ -120,6 +121,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// m.focus = FocusFile
 				// TODO: i button toggle, do the same as for Esc
 			} else {
+				m.indexListExpanded = true
 				m.focus = FocusIndex
 				indexes, err := index.All(db)
 				if err != nil {
@@ -129,24 +131,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				items := make([]list.Item, len(indexes))
 				for i, idx := range indexes {
-					items[i] = indexListItem{
+					indexItem := indexListItem{
 						par2Filename: idx.Filename,
 						dir:          idx.Dir,
-						desc:         idx.Dir + " - " + index.StatusDisplay(idx.Status),
 						status:       idx.Status,
+						size:         idx.Size,
+						lastVerified: idx.LastVerified,
 					}
+					indexItem.desc = formatIndexItemDesc(indexItem, m.indexListExpanded)
+					items[i] = indexItem
 				}
 
 				m.indexList = list.New(items, newIndexListItemDelegate(m), 0, 0)
 				m.indexList.Title = "All Indexes from Database (Press Esc to return)"
 				m.indexList.SetShowStatusBar(false)
 				m.indexList.DisableQuitKeybindings()
-
-				m.indexListExpanded = true
 			}
 		case "esc":
 			// Return to local indexes
 			if m.indexListExpanded {
+				m.indexListExpanded = false
 				osFiles, err := os.ReadDir(m.currentDir)
 				if err != nil {
 					log.Printf("Warning: failed to read directory: %v", err)
@@ -158,8 +162,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.indexList.Title = "Index Files"
 				m.indexList.SetShowStatusBar(false)
 				m.indexList.DisableQuitKeybindings()
-
-				m.indexListExpanded = false
 			}
 		// TODO: repair damaged files
 		case "enter":
@@ -203,14 +205,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fileList.SetItem(iIdx, item)
 		}
 
+		// Update indexes database
+		index.PutIndex(db, msg.dir, msg.title, index.StatusOK, time.Now(), msg.size)
+
 		// Update indexList - find the entry and mark it as completed
 		indexItems := m.indexList.Items()
 		iiIndex, _ := findListItem(indexItems, title+".par2", func(ii indexListItem) string { return ii.par2Filename })
 		if iiIndex != -1 {
 			ii := indexItems[iiIndex].(indexListItem)
-			index.PutIndex(db, msg.dir, ii.par2Filename, index.StatusOK, time.Now())
-			ii.desc = index.StatusDisplay(index.StatusOK)
+			ii.desc = formatIndexItemDesc(ii, m.indexListExpanded)
 			ii.status = index.StatusOK
+			ii.lastVerified = time.Now()
 			indexItems[iiIndex] = ii
 			m.indexList.SetItems(indexItems)
 		}
@@ -236,9 +241,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		iiIndex, _ := findListItem(indexItems, title+".par2", func(ii indexListItem) string { return ii.par2Filename })
 		if iiIndex != -1 {
 			ii := indexItems[iiIndex].(indexListItem)
-			index.PutIndex(db, msg.dir, ii.par2Filename, index.StatusDamaged, time.Now())
-			ii.desc = index.StatusDisplay(index.StatusDamaged)
+			// index.PutIndex(db, msg.dir, ii.par2Filename, index.StatusDamaged, time.Now(), ii.size)
+			ii.desc = formatIndexItemDesc(ii, m.indexListExpanded)
 			ii.status = index.StatusDamaged
+			ii.lastVerified = time.Now()
 			indexItems[iiIndex] = ii
 			m.indexList.SetItems(indexItems)
 		}
@@ -253,7 +259,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		title := msg.par2Filename
 
-		err := index.PutIndex(db, msg.dir, title, msg.status, time.Now())
+		err := index.PutIndex(db, msg.dir, title, msg.status, time.Now(), msg.size)
 		if err != nil {
 			log.Printf("Warning: failed to save index to database: %v", err)
 		}
@@ -261,7 +267,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		idx, item := findListItem(m.indexList.Items(), title, func(fi indexListItem) string { return fi.par2Filename })
 		if idx != -1 {
 			item.status = msg.status
-			item.desc = index.StatusDisplay(msg.status)
+			item.lastVerified = time.Now()
+			item.desc = formatIndexItemDesc(item, m.indexListExpanded)
 			m.indexList.SetItem(idx, item)
 		}
 

@@ -4,6 +4,7 @@ import (
 	"io"
 	"partui/index"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -16,6 +17,8 @@ type indexListItem struct {
 	dir          string
 	desc         string
 	status       index.Status // processing, ok, damaged
+	lastVerified time.Time
+	size         uint64
 }
 
 func (i indexListItem) Title() string       { return i.par2Filename }
