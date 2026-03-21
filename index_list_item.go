@@ -18,7 +18,6 @@ type indexListItem struct {
 	desc         string
 	status       index.Status // processing, ok, damaged
 	lastVerified time.Time
-	size         uint64
 }
 
 func (i indexListItem) Title() string       { return i.par2Filename }

@@ -49,15 +49,14 @@ func formatFileSize(bytes uint64) string {
 
 // formatIndexItemDesc formats the description for an index list item
 func formatIndexItemDesc(item indexListItem, expanded bool) string {
-	size := formatFileSize(item.size)
 	status := index.StatusDisplay(item.status)
 
 	if expanded && !item.lastVerified.IsZero() {
-		// Expanded mode: YYYY.MM.DD HH:MM | /path/to/dir | size | status
-		return item.lastVerified.Format("2006.01.02 15:04") + " | " + item.dir + " | " + size + " | " + status
+		// Expanded mode: YYYY.MM.DD HH:MM | /path/to/dir | status
+		return item.lastVerified.Format("2006.01.02 15:04") + " | " + item.dir + " | " + status
 	}
-	// Normal mode: /path/to/dir | size | status
-	return item.dir + " | " + size + " | " + status
+	// Normal mode: /path/to/dir | status
+	return item.dir + " | " + status
 }
 
 // BottomPanel displays index statistics at the bottom of the UI
@@ -209,6 +208,18 @@ func verifyParFiles(dir string, item indexListItem) {
 		// do nothing
 	}
 
+	// Check if directory exists before attempting verification
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		// Missing directory is a common case for offline/removable media and deserve a special status
+		msg := indexVerifyFinishedMsg{
+			dir:          dir,
+			par2Filename: item.par2Filename,
+			status:       index.StatusMissing,
+		}
+		program.Send(msg)
+		return
+	}
+
 	// TODO: propper logging
 	parPath := dir + "/" + item.par2Filename
 	options := gopar.VerifyOptions{
@@ -221,7 +232,6 @@ func verifyParFiles(dir string, item indexListItem) {
 		dir:          dir,
 		par2Filename: item.par2Filename,
 		status:       index.StatusOK,
-		size:         item.size,
 	}
 
 	if err != nil {
@@ -337,19 +347,10 @@ func processIndexFiles(m *Model, files []os.DirEntry) []list.Item {
 			}
 			m.archived = append(m.archived, archived...)
 
-			// Get file info for size
-			fileInfo, err := file.Info()
-			if err != nil {
-				log.Printf("Warning: failed to get file info: %v", err)
-				continue
-			}
-			fileSize := uint64(fileInfo.Size())
-
 			indexItem := indexListItem{
 				par2Filename: name,
 				dir:          m.currentDir,
 				status:       index.StatusOK,
-				size:         fileSize,
 			}
 
 			// Save to database if available
@@ -360,10 +361,9 @@ func processIndexFiles(m *Model, files []os.DirEntry) []list.Item {
 				} else if descriptor != nil {
 					indexItem.status = descriptor.Status
 					indexItem.lastVerified = descriptor.LastVerified
-					indexItem.size = descriptor.Size
 				} else {
 					now := time.Now()
-					err = index.PutIndex(db, m.currentDir, name, index.StatusOK, now, fileSize)
+					err = index.PutIndex(db, m.currentDir, name, index.StatusOK, now)
 					if err != nil {
 						log.Printf("Warning: failed to save index to database: %v", err)
 					} else {
@@ -435,7 +435,7 @@ func main() {
 			// Start verify workers for old indexes
 			for _, idx := range oldIndexes {
 				// set old indexes status to processing
-				index.PutIndex(db, idx.Dir, idx.Filename, index.StatusProcessing, idx.LastVerified, idx.Size)
+				index.UpdateIndexStatus(db, idx.Dir, idx.Filename, index.StatusProcessing)
 
 				// start verify goroutine
 				wg.Add(1)

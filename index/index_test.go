@@ -82,7 +82,7 @@ func TestGetIndex(t *testing.T) {
 	dir := "/test/dir"
 	filename := "testfile.txt"
 	lastVerified := time.Now().Truncate(time.Second)
-	err = PutIndex(db, dir, filename, StatusOK, lastVerified, 0)
+	err = PutIndex(db, dir, filename, StatusOK, lastVerified)
 	require.NoError(t, err)
 
 	// Test case 2: Existing path should return descriptor
@@ -104,7 +104,7 @@ func TestGetIndex(t *testing.T) {
 
 	// Test case 5: Update existing entry and check that Exists returns new key
 	newLastVerified := time.Now().Add(time.Hour)
-	err = PutIndex(db, dir, filename, StatusDamaged, newLastVerified, 0)
+	err = PutIndex(db, dir, filename, StatusDamaged, newLastVerified)
 	require.NoError(t, err)
 
 	descriptor, err = GetIndex(db, dir, filename)
@@ -144,7 +144,7 @@ func TestGetIndex_MultipleFiles(t *testing.T) {
 	files := []string{"file1.txt", "file2.txt", "file3.txt"}
 
 	for _, f := range files {
-		err = PutIndex(db, dir, f, StatusOK, time.Now(), 0)
+		err = PutIndex(db, dir, f, StatusOK, time.Now())
 		require.NoError(t, err)
 	}
 
@@ -181,7 +181,7 @@ func TestGetIndex_DifferentDirectories(t *testing.T) {
 	}
 
 	for _, f := range files {
-		err = PutIndex(db, f.dir, f.filename, StatusOK, time.Now(), 0)
+		err = PutIndex(db, f.dir, f.filename, StatusOK, time.Now())
 		require.NoError(t, err)
 	}
 
@@ -221,7 +221,7 @@ func TestPutIndex_Basic(t *testing.T) {
 	filename := "testfile.txt"
 	lastVerified := time.Now().Truncate(time.Second)
 
-	err = PutIndex(db, dir, filename, StatusOK, lastVerified, 0)
+	err = PutIndex(db, dir, filename, StatusOK, lastVerified)
 
 	assert.NoError(t, err)
 
@@ -249,11 +249,11 @@ func TestPutIndex_UpdateExisting(t *testing.T) {
 	newTime := time.Date(2024, 6, 15, 12, 30, 0, 0, time.Local)
 
 	// Add initial entry
-	err = PutIndex(db, dir, filename, StatusOK, oldTime, 0)
+	err = PutIndex(db, dir, filename, StatusOK, oldTime)
 	require.NoError(t, err)
 
 	// Update with new time and status
-	err = PutIndex(db, dir, filename, StatusDamaged, newTime, 0)
+	err = PutIndex(db, dir, filename, StatusDamaged, newTime)
 	require.NoError(t, err)
 
 	// Verify only the new entry exists
@@ -291,7 +291,7 @@ func TestPutIndex_DifferentStatuses(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		err = PutIndex(db, dir, filename, tc.status, lastVerified, 0)
+		err = PutIndex(db, dir, filename, tc.status, lastVerified)
 		require.NoError(t, err)
 
 		descriptor, err := GetIndex(db, dir, filename)
@@ -314,7 +314,7 @@ func TestPutIndex_MultipleFilesSameDir(t *testing.T) {
 
 	for i, f := range files {
 		lastVerified := time.Now().Add(time.Duration(i) * time.Hour)
-		err = PutIndex(db, dir, f, StatusOK, lastVerified, 0)
+		err = PutIndex(db, dir, f, StatusOK, lastVerified)
 		require.NoError(t, err)
 	}
 
@@ -343,7 +343,7 @@ func TestPutIndex_EmptyDirAndFilename(t *testing.T) {
 	filename := "testfile.txt"
 	lastVerified := time.Now()
 
-	err = PutIndex(db, dir, filename, StatusOK, lastVerified, 0)
+	err = PutIndex(db, dir, filename, StatusOK, lastVerified)
 	require.NoError(t, err)
 
 	descriptor, err := GetIndex(db, dir, filename)
@@ -372,7 +372,7 @@ func TestPutIndex_DifferentDirectories(t *testing.T) {
 	}
 
 	for _, f := range files {
-		err = PutIndex(db, f.dir, f.filename, StatusOK, time.Now(), 0)
+		err = PutIndex(db, f.dir, f.filename, StatusOK, time.Now())
 		require.NoError(t, err)
 	}
 
@@ -396,11 +396,11 @@ func TestGetOldIndexes_Basic(t *testing.T) {
 	dir := "/test/dir"
 
 	// Add old index (should be returned)
-	err = PutIndex(db, dir, "old.txt", StatusOK, oldTime, 0)
+	err = PutIndex(db, dir, "old.txt", StatusOK, oldTime)
 	require.NoError(t, err)
 
 	// Add recent index (should NOT be returned)
-	err = PutIndex(db, dir, "recent.txt", StatusOK, now, 0)
+	err = PutIndex(db, dir, "recent.txt", StatusOK, now)
 	require.NoError(t, err)
 
 	// Query for indexes older than 30 days
@@ -440,7 +440,7 @@ func TestGetOldIndexes_AllIndexesOld(t *testing.T) {
 	files := []string{"file1.txt", "file2.txt", "file3.txt"}
 
 	for _, f := range files {
-		err = PutIndex(db, dir, f, StatusOK, oldTime, 0)
+		err = PutIndex(db, dir, f, StatusOK, oldTime)
 		require.NoError(t, err)
 	}
 
@@ -464,12 +464,12 @@ func TestGetOldIndexes_ThresholdExcludesRecent(t *testing.T) {
 	dir := "/test/dir"
 
 	// Add old index
-	err = PutIndex(db, dir, "old.txt", StatusOK, oldTime, 0)
+	err = PutIndex(db, dir, "old.txt", StatusOK, oldTime)
 	require.NoError(t, err)
 
 	// Add very recent index (1 hour ago - should NOT be old)
 	recentTime := newTime.Add(-1 * time.Hour)
-	err = PutIndex(db, dir, "recent.txt", StatusOK, recentTime, 0)
+	err = PutIndex(db, dir, "recent.txt", StatusOK, recentTime)
 	require.NoError(t, err)
 
 	// Threshold is 30 days ago - only old.txt should be returned
@@ -494,13 +494,13 @@ func TestGetOldIndexes_DifferentDirectories(t *testing.T) {
 	recentTime := time.Now()
 
 	// Add old indexes in different directories
-	err = PutIndex(db, "/dir1", "file1.txt", StatusOK, oldTime, 0)
+	err = PutIndex(db, "/dir1", "file1.txt", StatusOK, oldTime)
 	require.NoError(t, err)
-	err = PutIndex(db, "/dir2", "file2.txt", StatusOK, oldTime, 0)
+	err = PutIndex(db, "/dir2", "file2.txt", StatusOK, oldTime)
 	require.NoError(t, err)
 
 	// Add recent index
-	err = PutIndex(db, "/dir3", "file3.txt", StatusOK, recentTime, 0)
+	err = PutIndex(db, "/dir3", "file3.txt", StatusOK, recentTime)
 	require.NoError(t, err)
 
 	threshold := time.Now().Add(-30 * 24 * time.Hour)
@@ -517,4 +517,57 @@ func TestGetOldIndexes_DifferentDirectories(t *testing.T) {
 	assert.True(t, dirs["/dir1"])
 	assert.True(t, dirs["/dir2"])
 	assert.False(t, dirs["/dir3"])
+}
+
+func TestUpdateIndexStatus(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+	db, err := OpenDB(dbPath)
+	require.NoError(t, err)
+	defer CloseDB(db)
+
+	dir := "/test/dir"
+	filename := "test.par2"
+
+	// Create initial index with StatusOK
+	initialTime := time.Now().Add(-24 * time.Hour)
+	err = PutIndex(db, dir, filename, StatusOK, initialTime)
+	require.NoError(t, err)
+
+	// Verify initial state
+	idx, err := GetIndex(db, dir, filename)
+	require.NoError(t, err)
+	assert.Equal(t, StatusOK, idx.Status)
+	assert.Equal(t, initialTime.Unix(), idx.LastVerified.Unix())
+
+	// Update status to StatusMissing (should NOT change LastVerified)
+	err = UpdateIndexStatus(db, dir, filename, StatusMissing)
+	require.NoError(t, err)
+
+	// Verify status changed but LastVerified preserved
+	idx, err = GetIndex(db, dir, filename)
+	require.NoError(t, err)
+	assert.Equal(t, StatusMissing, idx.Status)
+	assert.Equal(t, initialTime.Unix(), idx.LastVerified.Unix(), "LastVerified should not change")
+
+	// Update status to StatusDamaged
+	err = UpdateIndexStatus(db, dir, filename, StatusDamaged)
+	require.NoError(t, err)
+
+	idx, err = GetIndex(db, dir, filename)
+	require.NoError(t, err)
+	assert.Equal(t, StatusDamaged, idx.Status)
+	assert.Equal(t, initialTime.Unix(), idx.LastVerified.Unix(), "LastVerified should still be unchanged")
+}
+
+func TestUpdateIndexStatus_NonExistent(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+	db, err := OpenDB(dbPath)
+	require.NoError(t, err)
+	defer CloseDB(db)
+
+	// Updating non-existent index should not error
+	err = UpdateIndexStatus(db, "/nonexistent", "file.par2", StatusMissing)
+	require.NoError(t, err)
 }

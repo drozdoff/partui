@@ -46,7 +46,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focus = FocusFile
 			}
 			return m, nil
-		case "up", "down":
+		case "up", "down", "pgup", "pgdown", "home", "end":
 			// Navigate the focused list
 			if m.focus == FocusFile {
 				m.fileList, cmd = m.fileList.Update(msg)
@@ -111,7 +111,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.indexList.SetItem(m.indexList.Index(), item)
 			m.indexList.CursorDown()
 
-			index.PutIndex(db, item.dir, item.par2Filename, index.StatusProcessing, time.Now(), item.size)
+			index.UpdateIndexStatus(db, item.dir, item.par2Filename, index.StatusProcessing)
 			m.bottomPanel = calculateBottomPanelStats(db)
 			wg.Add(1)
 			go verifyParFiles(item.dir, item)
@@ -135,7 +135,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						par2Filename: idx.Filename,
 						dir:          idx.Dir,
 						status:       idx.Status,
-						size:         idx.Size,
 						lastVerified: idx.LastVerified,
 					}
 					indexItem.desc = formatIndexItemDesc(indexItem, m.indexListExpanded)
@@ -191,10 +190,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
-		case "pgup", "pgdown", "home", "end":
-			// TODO: only works in file list. Make it focus window dependent
-			m.fileList, cmd = m.fileList.Update(msg)
-			return m, cmd
 		}
 	case parCreateFinishedMsg:
 		title := msg.title
@@ -206,7 +201,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Update indexes database
-		index.PutIndex(db, msg.dir, msg.title, index.StatusOK, time.Now(), msg.size)
+		index.PutIndex(db, msg.dir, msg.title, index.StatusOK, time.Now())
 
 		// Update indexList - find the entry and mark it as completed
 		indexItems := m.indexList.Items()
@@ -226,7 +221,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case parCreateErrorMsg:
 		if msg.err != nil {
-			log.Printf("Warning: failed to verify %s: %v", msg.title, msg.err)
+			log.Printf("Warning: failed to create %s: %v", msg.title, msg.err)
 		}
 
 		title := msg.title
@@ -259,15 +254,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		title := msg.par2Filename
 
-		err := index.PutIndex(db, msg.dir, title, msg.status, time.Now(), msg.size)
-		if err != nil {
-			log.Printf("Warning: failed to save index to database: %v", err)
+		// If directory is missing (StatusMissing), don't update LastVerified
+		if msg.status == index.StatusMissing {
+			err := index.UpdateIndexStatus(db, msg.dir, title, msg.status)
+			if err != nil {
+				log.Printf("Warning: failed to update index status in database: %v", err)
+			}
+		} else {
+			err := index.PutIndex(db, msg.dir, title, msg.status, time.Now())
+			if err != nil {
+				log.Printf("Warning: failed to save index to database: %v", err)
+			}
 		}
 
 		idx, item := findListItem(m.indexList.Items(), title, func(fi indexListItem) string { return fi.par2Filename })
 		if idx != -1 {
 			item.status = msg.status
-			item.lastVerified = time.Now()
+			// Only update lastVerified if not StatusMissing
+			if msg.status != index.StatusMissing {
+				item.lastVerified = time.Now()
+			}
 			item.desc = formatIndexItemDesc(item, m.indexListExpanded)
 			m.indexList.SetItem(idx, item)
 		}

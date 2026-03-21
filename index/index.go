@@ -18,6 +18,7 @@ const (
 	StatusProcessing   Status = 'p'
 	StatusDamaged      Status = 'd'
 	StatusUnverifiable Status = 'u'
+	StatusMissing      Status = 'm'
 )
 
 // StatusDisplay returns the display string for a status
@@ -29,6 +30,10 @@ func StatusDisplay(s Status) string {
 		return "Processing"
 	case StatusDamaged:
 		return "Damaged"
+	case StatusUnverifiable:
+		return "Unverifiable"
+	case StatusMissing:
+		return "Missing"
 	default:
 		return "Unknown"
 	}
@@ -52,7 +57,6 @@ type IndexDescriptor struct {
 	Dir          string
 	Status       Status
 	LastVerified time.Time
-	Size         uint64
 }
 
 // GetDBPath returns the default path to the index database
@@ -103,17 +107,13 @@ func CloseDB(db *bbolt.DB) {
 	}
 }
 
-// GenerateKey creates a primary key: bigendian timestamp + status + size + dir + filename
-func GenerateKey(dir, filename string, lastVerified time.Time, status Status, size uint64) []byte {
+// GenerateKey creates a primary key: bigendian timestamp + status + dir + filename
+func GenerateKey(dir, filename string, lastVerified time.Time, status Status) []byte {
 	ts := uint64(lastVerified.Unix())
 	tsBytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(tsBytes, ts)
 
-	sizeBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(sizeBytes, size)
-
 	key := append(tsBytes, byte(status))
-	key = append(key, sizeBytes...)
 	return append(key, []byte(dir+"/"+filename)...)
 }
 
@@ -123,8 +123,8 @@ func GenerateLookupKey(dir, filename string) []byte {
 }
 
 // PutIndex saves an IndexDescriptor to the database (value is empty - all data is in the key)
-func PutIndex(db *bbolt.DB, dir, filename string, status Status, lastVerified time.Time, size uint64) error {
-	key := GenerateKey(dir, filename, lastVerified, status, size)
+func PutIndex(db *bbolt.DB, dir, filename string, status Status, lastVerified time.Time) error {
+	key := GenerateKey(dir, filename, lastVerified, status)
 	lookupKey := GenerateLookupKey(dir, filename)
 
 	return db.Update(func(tx *bbolt.Tx) error {
@@ -178,6 +178,48 @@ func GetIndex(db *bbolt.DB, dir, filename string) (*IndexDescriptor, error) {
 
 	descriptor := parsePrimaryKey(primaryKey)
 	return &descriptor, nil
+}
+
+// UpdateIndexStatus updates only the status of an existing index, preserving LastVerified
+func UpdateIndexStatus(db *bbolt.DB, dir, filename string, status Status) error {
+	// Get the existing index to preserve LastVerified
+	existing, err := GetIndex(db, dir, filename)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return nil // Index doesn't exist, nothing to update
+	}
+
+	// Generate new key with same LastVerified but new status
+	newKey := GenerateKey(dir, filename, existing.LastVerified, status)
+	lookupKey := GenerateLookupKey(dir, filename)
+
+	return db.Update(func(tx *bbolt.Tx) error {
+		indexes := tx.Bucket(bucketName(BucketIndexes))
+		byPath := tx.Bucket(bucketName(BucketByPath))
+		damaged := tx.Bucket(bucketName(BucketDamaged))
+
+		// Get the old key
+		oldKey := byPath.Get(lookupKey)
+		if oldKey != nil {
+			// Delete old entry
+			indexes.Delete(oldKey)
+		}
+
+		// Save new entry with updated status but same timestamp
+		indexes.Put(newKey, nil)
+		byPath.Put(lookupKey, newKey)
+
+		// Manage damaged bucket based on status
+		if status == StatusDamaged {
+			damaged.Put(lookupKey, nil)
+		} else {
+			damaged.Delete(lookupKey)
+		}
+
+		return nil
+	})
 }
 
 // All retrieves all IndexDescriptors
@@ -250,8 +292,7 @@ func CountDamaged(db *bbolt.DB) (int, error) {
 func parsePrimaryKey(key []byte) IndexDescriptor {
 	ts := binary.BigEndian.Uint64(key[:8])
 	status := Status(key[8])
-	size := binary.BigEndian.Uint64(key[9:17])
-	path := string(key[17:])
+	path := string(key[9:])
 
 	// Split path to dir and filename (last slash)
 	lastSlash := strings.LastIndex(path, "/")
@@ -263,7 +304,6 @@ func parsePrimaryKey(key []byte) IndexDescriptor {
 		Dir:          dir,
 		Status:       status,
 		LastVerified: time.Unix(int64(ts), 0),
-		Size:         size,
 	}
 }
 
