@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"partui/index"
 	"partui/par2"
@@ -109,6 +110,39 @@ var db *bbolt.DB
 // counting semaphore for any kind of workers
 var workers = make(chan struct{}, numProcs-1)
 
+// logger
+var logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+// getLogPath returns the path to the log file
+func getLogPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".partui", "partui.log")
+}
+
+// initLogger initializes structured logging to file
+func initLogger() {
+	logPath := getLogPath()
+
+	// Ensure directory exists
+	dir := filepath.Dir(logPath)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		log.Fatalf("failed to create log directory: %v", err)
+	}
+
+	// Open log file
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Fatalf("failed to open log file: %v", err)
+	}
+
+	// Create JSON handler with INFO level
+	handler := slog.NewJSONHandler(f, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})
+
+	logger = slog.New(handler)
+}
+
 // calculateBottomPanelStats computes statistics for the bottom panel
 func calculateBottomPanelStats(db *bbolt.DB) BottomPanel {
 	if db == nil {
@@ -118,21 +152,21 @@ func calculateBottomPanelStats(db *bbolt.DB) BottomPanel {
 	// Get total count
 	totalCount, err := index.CountAll(db)
 	if err != nil {
-		log.Printf("Warning: failed to count indexes: %v", err)
+		logger.Warn("failed to count indexes", slog.String("error", err.Error()))
 		return BottomPanel{}
 	}
 
 	// Get damaged items
 	damagedItems, err := index.GetDamaged(db)
 	if err != nil {
-		log.Printf("Warning: failed to get damaged indexes: %v", err)
+		logger.Warn("failed to get damaged indexes", slog.String("error", err.Error()))
 		return BottomPanel{}
 	}
 
 	// Get all indexes to count processing ones
 	allIndexes, err := index.All(db)
 	if err != nil {
-		log.Printf("Warning: failed to get all indexes: %v", err)
+		logger.Warn("failed to get all indexes", slog.String("error", err.Error()))
 		return BottomPanel{}
 	}
 
@@ -174,6 +208,11 @@ func createParFiles(dir string, title string, size uint64) {
 		// do nothing
 	}
 
+	logger.Debug("starting PAR2 creation",
+		slog.String("dir", dir),
+		slog.String("title", title),
+		slog.Uint64("size", size))
+
 	filePath := dir + "/" + title
 	parPath := filePath + ".par2"
 
@@ -186,9 +225,20 @@ func createParFiles(dir string, title string, size uint64) {
 
 	err := gopar.Create(parPath, []string{filePath}, options)
 	if err != nil {
+		logger.Error("PAR2 creation failed",
+			slog.String("dir", dir),
+			slog.String("title", title),
+			slog.String("par_path", parPath),
+			slog.String("error", err.Error()))
 		program.Send(parCreateErrorMsg{dir: dir, title: title, err: err})
 		return
 	}
+
+	logger.Info("PAR2 creation successful",
+		slog.String("dir", dir),
+		slog.String("title", title),
+		slog.String("par_path", parPath),
+		slog.Uint64("size", size))
 
 	program.Send(parCreateFinishedMsg{dir: dir, title: title, size: size})
 }
@@ -208,8 +258,16 @@ func verifyParFiles(dir string, item indexListItem) {
 		// do nothing
 	}
 
+	logger.Debug("starting PAR2 verification",
+		slog.String("dir", dir),
+		slog.String("par2_file", item.par2Filename))
+
 	// Check if directory exists before attempting verification
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		logger.Warn("directory not found, marking as missing",
+			slog.String("dir", dir),
+			slog.String("par2_file", item.par2Filename))
+
 		// Missing directory is a common case for offline/removable media and deserve a special status
 		msg := indexVerifyFinishedMsg{
 			dir:          dir,
@@ -235,10 +293,23 @@ func verifyParFiles(dir string, item indexListItem) {
 	}
 
 	if err != nil {
+		logger.Error("PAR2 verification failed",
+			slog.String("dir", dir),
+			slog.String("par2_file", item.par2Filename),
+			slog.String("error", err.Error()),
+			slog.String("status", "unverifiable"))
 		msg.status = index.StatusUnverifiable
 		msg.err = err
 	} else if res.ShardCounts.RepairNeeded() {
+		logger.Warn("PAR2 file damaged",
+			slog.String("dir", dir),
+			slog.String("par2_file", item.par2Filename),
+			slog.Bool("repair_needed", true))
 		msg.status = index.StatusDamaged
+	} else {
+		logger.Debug("PAR2 verification successful",
+			slog.String("dir", dir),
+			slog.String("par2_file", item.par2Filename))
 	}
 
 	program.Send(msg)
@@ -342,7 +413,10 @@ func processIndexFiles(m *Model, files []os.DirEntry) []list.Item {
 		if isParIndex(name) {
 			archived, err := par2.ListPar2Filenames(m.currentDir + "/" + name)
 			if err != nil {
-				// TODO: error handling
+				logger.Warn("failed to list PAR2 filenames",
+					slog.String("dir", m.currentDir),
+					slog.String("filename", name),
+					slog.String("error", err.Error()))
 				continue
 			}
 			m.archived = append(m.archived, archived...)
@@ -357,7 +431,10 @@ func processIndexFiles(m *Model, files []os.DirEntry) []list.Item {
 			if db != nil {
 				descriptor, err := index.GetIndex(db, m.currentDir, name)
 				if err != nil {
-					log.Printf("Warning: failed to check index in database: %v", err)
+					logger.Warn("failed to check index in database",
+						slog.String("dir", m.currentDir),
+						slog.String("filename", name),
+						slog.String("error", err.Error()))
 				} else if descriptor != nil {
 					indexItem.status = descriptor.Status
 					indexItem.lastVerified = descriptor.LastVerified
@@ -365,7 +442,10 @@ func processIndexFiles(m *Model, files []os.DirEntry) []list.Item {
 					now := time.Now()
 					err = index.PutIndex(db, m.currentDir, name, index.StatusOK, now)
 					if err != nil {
-						log.Printf("Warning: failed to save index to database: %v", err)
+						logger.Warn("failed to save index to database",
+							slog.String("dir", m.currentDir),
+							slog.String("filename", name),
+							slog.String("error", err.Error()))
 					} else {
 						indexItem.lastVerified = now
 					}
@@ -401,6 +481,9 @@ func processIndexFiles(m *Model, files []os.DirEntry) []list.Item {
 }
 
 func main() {
+	initLogger()
+	logger.Info("starting PartUI")
+
 	name, err := filepath.Abs(os.Args[0])
 	printShowStopper(err)
 
@@ -409,8 +492,13 @@ func main() {
 	defer index.CloseDB(db)
 
 	if err != nil {
-		log.Printf("Warning: failed to open index database: %v", err)
+		logger.Error("failed to open index database",
+			slog.String("db_path", index.GetDBPath()),
+			slog.String("error", err.Error()))
 		db = nil
+	} else {
+		logger.Debug("index database opened",
+			slog.String("db_path", index.GetDBPath()))
 	}
 
 	m := Model{}
@@ -428,9 +516,12 @@ func main() {
 		threshold := time.Now().Add(-ReverifyThreshold)
 		oldIndexes, err := index.GetOldIndexes(db, threshold)
 		if err != nil {
-			log.Printf("Warning: failed to get old indexes: %v", err)
+			logger.Warn("failed to get old indexes",
+				slog.String("error", err.Error()))
 		} else if len(oldIndexes) > 0 {
-			log.Printf("Found %d indexes requiring re-verification", len(oldIndexes))
+			logger.Info("found indexes requiring re-verification",
+				slog.Int("count", len(oldIndexes)),
+				slog.Duration("threshold", ReverifyThreshold))
 
 			// Start verify workers for old indexes
 			for _, idx := range oldIndexes {
@@ -450,11 +541,15 @@ func main() {
 	_, err = program.Run()
 	cancel()
 	wg.Wait()
+
+	logger.Info("PartUI shutting down")
 	printShowStopper(err)
 }
 
 func printShowStopper(err error) {
 	if err != nil {
+		logger.Error("fatal error - shutting down",
+			slog.String("error", err.Error()))
 		fmt.Printf("Something went wrong: %v", err)
 		os.Exit(1)
 	}

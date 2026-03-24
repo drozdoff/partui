@@ -13,7 +13,7 @@ package main
 // - index.PutIndex() - stores index in database
 
 import (
-	"log"
+	"log/slog"
 	"os"
 	"partui/index"
 	"path/filepath"
@@ -125,7 +125,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focus = FocusIndex
 				indexes, err := index.All(db)
 				if err != nil {
-					log.Printf("Warning: failed to load all indexes: %v", err)
+					logger.Warn("failed to load all indexes", slog.String("error", err.Error()))
 					return m, nil
 				}
 
@@ -152,7 +152,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.indexListExpanded = false
 				osFiles, err := os.ReadDir(m.currentDir)
 				if err != nil {
-					log.Printf("Warning: failed to read directory: %v", err)
+					logger.Warn("failed to read directory", slog.String("dir", m.currentDir), slog.String("error", err.Error()))
 					return m, nil
 				}
 				indexItems := processIndexFiles(m, osFiles)
@@ -221,7 +221,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case parCreateErrorMsg:
 		if msg.err != nil {
-			log.Printf("Warning: failed to create %s: %v", msg.title, msg.err)
+			logger.Error("failed to create PAR2 file", slog.String("dir", msg.dir), slog.String("title", msg.title), slog.String("error", msg.err.Error()))
 		}
 
 		title := msg.title
@@ -249,7 +249,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case indexVerifyFinishedMsg:
 		if msg.err != nil {
-			log.Printf("Warning: failed to verify %s: %v", msg.par2Filename, msg.err)
+			logger.Error("failed to verify PAR2 file", slog.String("dir", msg.dir), slog.String("par2_file", msg.par2Filename), slog.String("error", msg.err.Error()))
 		}
 
 		title := msg.par2Filename
@@ -258,12 +258,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.status == index.StatusMissing {
 			err := index.UpdateIndexStatus(db, msg.dir, title, msg.status)
 			if err != nil {
-				log.Printf("Warning: failed to update index status in database: %v", err)
+				logger.Warn("failed to update index status in database", slog.String("error", err.Error()))
 			}
 		} else {
 			err := index.PutIndex(db, msg.dir, title, msg.status, time.Now())
 			if err != nil {
-				log.Printf("Warning: failed to save index to database: %v", err)
+				logger.Warn("failed to save index to database", slog.String("error", err.Error()))
 			}
 		}
 
