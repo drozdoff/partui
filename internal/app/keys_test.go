@@ -288,3 +288,25 @@ func TestKeys_Enter_OnFile_DoesNothing(t *testing.T) {
 
 	assert.Equal(t, dir, m.currentDir)
 }
+
+// Item 3.3: updateIndexItem mutates the entry, recomputes the description
+// and reports missing entries instead of silently doing nothing
+func TestModel_UpdateIndexItem(t *testing.T) {
+	m := newTestModel()
+	fixed := time.Unix(1700000000, 0)
+	m.app.clock = func() time.Time { return fixed }
+	m.indexList.SetItems([]list.Item{
+		indexListItem{par2Filename: "a.par2", dir: "/d", status: index.StatusProcessing},
+	})
+
+	assert.True(t, m.updateIndexItem("a.par2", func(ii *indexListItem) {
+		ii.status = index.StatusOK
+		ii.lastVerified = fixed
+	}))
+
+	it := m.indexList.Items()[0].(indexListItem)
+	assert.Equal(t, index.StatusOK, it.status)
+	assert.Equal(t, "/d | OK", it.desc)
+
+	assert.False(t, m.updateIndexItem("missing.par2", func(ii *indexListItem) {}))
+}

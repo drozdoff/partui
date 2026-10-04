@@ -97,7 +97,7 @@ func (m *Model) buildModelForDirectory(dir string) error {
 	// Default focus on file list
 	m.focus = FocusFile
 
-	items := make([]fileListItem, 0, len(osFiles)+1)
+	items := make([]fileListItem, 0, len(osFiles)+1) // +1 for the "../" parent entry
 	indexItems := m.processIndexFiles(osFiles)
 
 	// unless root directory, add .. to a list of directories
@@ -154,12 +154,7 @@ func (m *Model) buildModelForDirectory(dir string) error {
 	m.fileList.DisableQuitKeybindings()
 
 	// Populate indexList with existing .par2 index files
-	m.indexList = list.New(indexItems, newIndexListItemDelegate(m), 0, 0)
-	m.indexList.Title = "Index Files"
-	m.indexList.SetShowHelp(false)
-	m.indexList.SetShowStatusBar(false)
-	m.indexList.SetFilterState(list.Unfiltered)
-	m.indexList.DisableQuitKeybindings()
+	m.setIndexList(indexItems, "Index Files")
 
 	// Initialize bottom panel statistics
 	m.refreshStats()
@@ -210,7 +205,7 @@ func (m *Model) processIndexFiles(files []os.DirEntry) []list.Item {
 	for _, file := range files {
 		name := file.Name()
 		if isParIndex(name) {
-			archived, err := par2.ListPar2Filenames(m.currentDir + "/" + name)
+			archived, err := par2.ListPar2Filenames(filepath.Join(m.currentDir, name))
 			if err != nil {
 				// A .par2 file that cannot be parsed must not silently
 				// disappear from the index list: show it with an honest

@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"partui/internal/index"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -163,7 +164,7 @@ func (bp BottomPanel) View(width int) string {
 	if len(bp.damagedItems) > 0 {
 		damagedNames := make([]string, 0, len(bp.damagedItems))
 		for _, d := range bp.damagedItems {
-			damagedNames = append(damagedNames, d.dir+"/"+d.par2Filename)
+			damagedNames = append(damagedNames, filepath.Join(d.dir, d.par2Filename))
 		}
 		damagedLine = " | Damaged: " + strings.Join(damagedNames, ", ")
 	}

@@ -8,6 +8,7 @@ import (
 	"partui/internal/config"
 	"partui/internal/index"
 	"partui/internal/par2"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -67,6 +68,34 @@ func (a *App) now() time.Time {
 	return a.clock()
 }
 
+// launch runs fn in a background goroutine: it tracks the WaitGroup,
+// limits concurrency with the workers semaphore and respects context
+// cancellation both before and while waiting for a free slot.
+func (a *App) launch(fn func()) {
+	a.wg.Go(func() {
+		select {
+		case a.workers <- struct{}{}:
+			defer func() { <-a.workers }()
+		case <-a.ctx.Done():
+			return
+		}
+		if a.isCancelled() {
+			return
+		}
+		fn()
+	})
+}
+
+// isCancelled reports whether the app context has been cancelled
+func (a *App) isCancelled() bool {
+	select {
+	case <-a.ctx.Done():
+		return true
+	default:
+		return false
+	}
+}
+
 // Shutdown cancels the app context, waits for background goroutines and only
 // then closes the index store — strictly in that order, so no goroutine
 // can write into a closed database.
@@ -90,26 +119,12 @@ func (a *App) logStoreError(msg string, err error) {
 }
 
 func (a *App) createParFiles(dir string, title string, size uint64) {
-	a.workers <- struct{}{}
-	defer func() {
-		<-a.workers
-		a.wg.Done()
-	}()
-
-	// don't start a new file if program exited
-	select {
-	case <-a.ctx.Done():
-		return
-	default:
-		// do nothing
-	}
-
 	a.logger.Debug("starting PAR2 creation",
 		slog.String("dir", dir),
 		slog.String("title", title),
 		slog.Uint64("size", size))
 
-	filePath := dir + "/" + title
+	filePath := filepath.Join(dir, title)
 	parPath := filePath + ".par2"
 
 	options := gopar.CreateOptions{
@@ -140,20 +155,6 @@ func (a *App) createParFiles(dir string, title string, size uint64) {
 }
 
 func (a *App) verifyParFiles(dir string, item indexListItem) {
-	a.workers <- struct{}{}
-	defer func() {
-		<-a.workers
-		a.wg.Done()
-	}()
-
-	// don't start a new file if program exited
-	select {
-	case <-a.ctx.Done():
-		return
-	default:
-		// do nothing
-	}
-
 	a.logger.Debug("starting PAR2 verification",
 		slog.String("dir", dir),
 		slog.String("par2_file", item.par2Filename))
@@ -175,7 +176,7 @@ func (a *App) verifyParFiles(dir string, item indexListItem) {
 	}
 
 	// TODO: propper logging
-	parPath := dir + "/" + item.par2Filename
+	parPath := filepath.Join(dir, item.par2Filename)
 	options := gopar.VerifyOptions{
 		NumGoroutines:  runtime.GOMAXPROCS(0),
 		VerifyDelegate: &par2.FilenameCollector{},

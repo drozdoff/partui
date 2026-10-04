@@ -33,16 +33,15 @@ func (m *Model) handleVerifyFinished(msg indexVerifyFinishedMsg) tea.Cmd {
 		}
 	}
 
-	idx, item := findListItem(m.indexList.Items(), title, func(fi indexListItem) string { return fi.par2Filename })
-	if idx != -1 {
-		item.status = msg.status
-		// Only update lastVerified if not StatusMissing
+	// The entry may be gone if the directory changed while the
+	// verification was running; StatusMissing keeps the old LastVerified —
+	// the index was not actually verified
+	m.updateIndexItem(title, func(ii *indexListItem) {
+		ii.status = msg.status
 		if msg.status != index.StatusMissing {
-			item.lastVerified = m.app.now()
+			ii.lastVerified = m.app.now()
 		}
-		item.desc = formatIndexItemDesc(item, m.indexListExpanded)
-		m.indexList.SetItem(idx, item)
-	}
+	})
 
 	// Update bottom panel statistics
 	m.refreshStats()

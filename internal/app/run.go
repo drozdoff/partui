@@ -96,9 +96,10 @@ func run(logger *slog.Logger) error {
 			app.store.UpdateStatus(idx.Dir, idx.Filename, index.StatusProcessing)
 
 			// start verify goroutine
-			app.wg.Add(1)
-			go app.verifyParFiles(idx.Dir, indexListItem{
-				par2Filename: idx.Filename,
+			app.launch(func() {
+				app.verifyParFiles(idx.Dir, indexListItem{
+					par2Filename: idx.Filename,
+				})
 			})
 		}
 		m.refreshStats()

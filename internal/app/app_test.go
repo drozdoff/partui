@@ -37,6 +37,53 @@ func TestApp_Shutdown_NoopStore_NoPanic(t *testing.T) {
 	assert.NotPanics(t, func() { app.Shutdown() })
 }
 
+// Item 3.3: launch runs the function and the WaitGroup tracks it
+func TestApp_Launch_RunsFn(t *testing.T) {
+	app := newTestApp()
+
+	ran := make(chan struct{})
+	app.launch(func() { close(ran) })
+
+	select {
+	case <-ran:
+	case <-time.After(2 * time.Second):
+		t.Fatal("launch did not run fn")
+	}
+	app.wg.Wait()
+}
+
+// Item 3.3: a goroutine waiting for a worker slot must be released by
+// context cancellation — before launch() existed, `workers <- struct{}{}`
+// blocked ignoring ctx.Done() and Shutdown hung
+func TestApp_Launch_CancelledWhileWaitingForSlot(t *testing.T) {
+	app := newTestApp() // the semaphore capacity is 1
+
+	// occupy the only slot, then cancel while launch is waiting
+	app.workers <- struct{}{}
+	app.cancel()
+
+	ran := make(chan struct{})
+	app.launch(func() { close(ran) })
+
+	done := make(chan struct{})
+	go func() {
+		app.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("launch blocked on the semaphore despite cancellation")
+	}
+	select {
+	case <-ran:
+		t.Fatal("fn must not run after cancellation")
+	default:
+	}
+	<-app.workers
+}
+
 func TestApp_Shutdown_ClosesStore(t *testing.T) {
 	st, err := newBboltStore(filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)

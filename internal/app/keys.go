@@ -126,8 +126,9 @@ func (m *Model) createSelected() tea.Cmd {
 				item.selected = false
 				m.fileList.SetItem(idx, item)
 				m.addIndex(item.title + ".par2")
-				m.app.wg.Add(1)
-				go m.app.createParFiles(m.currentDir, item.title, item.size)
+				m.app.launch(func() {
+					m.app.createParFiles(m.currentDir, item.title, item.size)
+				})
 			}
 		}
 	} else {
@@ -143,8 +144,9 @@ func (m *Model) createSelected() tea.Cmd {
 		m.fileList.SetItem(m.fileList.Index(), item)
 		m.fileList.CursorDown()
 		m.addIndex(item.title + ".par2")
-		m.app.wg.Add(1)
-		go m.app.createParFiles(m.currentDir, item.title, item.size)
+		m.app.launch(func() {
+			m.app.createParFiles(m.currentDir, item.title, item.size)
+		})
 	}
 	return nil
 }
@@ -160,8 +162,9 @@ func (m *Model) openSelected() tea.Cmd {
 		return nil
 	}
 
-	dir := m.currentDir + "/" + item.title
-	newDir := filepath.Dir(dir)
+	// the titles of directory entries carry a trailing slash; Join cleans
+	// it off and resolves "../"
+	newDir := filepath.Join(m.currentDir, item.title)
 
 	// Save current dir to select when going back
 	var prevDir string = ""
@@ -211,8 +214,9 @@ func (m *Model) verifySelected() tea.Cmd {
 		m.app.logger.Warn("failed to update index status in database", slog.String("error", err.Error()))
 	}
 	m.refreshStats()
-	m.app.wg.Add(1)
-	go m.app.verifyParFiles(item.dir, item)
+	m.app.launch(func() {
+		m.app.verifyParFiles(item.dir, item)
+	})
 	return nil
 }
 
@@ -222,10 +226,17 @@ func (m *Model) expandIndexList() tea.Cmd {
 	// TODO: i button toggle, do the same as for Esc
 	m.indexListExpanded = true
 	m.focus = FocusIndex
+	m.rebuildIndexListAll()
+	return nil
+}
 
+// rebuildIndexListAll refills the index list from the whole database —
+// the expanded mode
+func (m *Model) rebuildIndexListAll() {
 	indexes, err := m.app.store.All()
 	if err != nil {
-		return m.reportError("load all indexes", err)
+		m.reportError("load all indexes", err)
+		return
 	}
 
 	items := make([]list.Item, len(indexes))
@@ -240,31 +251,37 @@ func (m *Model) expandIndexList() tea.Cmd {
 		items[i] = indexItem
 	}
 
-	m.indexList = list.New(items, newIndexListItemDelegate(m), 0, 0)
-	m.indexList.Title = "All Indexes from Database (Press Esc to return)"
-	m.indexList.SetShowStatusBar(false)
-	m.indexList.DisableQuitKeybindings()
-	m.applyLayout()
-
-	return nil
+	m.setIndexList(items, "All Indexes from Database (Press Esc to return)")
 }
 
 // collapseIndexList rebuilds the index list from the local directory
 func (m *Model) collapseIndexList() tea.Cmd {
 	m.indexListExpanded = false
+	m.rebuildIndexListLocal()
+	return nil
+}
+
+// rebuildIndexListLocal refills the index list from the .par2 files of the
+// current directory — the collapsed mode
+func (m *Model) rebuildIndexListLocal() {
 	osFiles, err := os.ReadDir(m.currentDir)
 	if err != nil {
-		return m.reportError("read directory", err)
+		m.reportError("read directory", err)
+		return
 	}
-	indexItems := m.processIndexFiles(osFiles)
+	m.setIndexList(m.processIndexFiles(osFiles), "Index Files")
+}
 
-	m.indexList = list.New(indexItems, newIndexListItemDelegate(m), 0, 0)
-	m.indexList.Title = "Index Files"
+// setIndexList replaces the index list with the given items under the
+// given title and reapplies the layout
+func (m *Model) setIndexList(items []list.Item, title string) {
+	m.indexList = list.New(items, newIndexListItemDelegate(m), 0, 0)
+	m.indexList.Title = title
+	m.indexList.SetShowHelp(false)
 	m.indexList.SetShowStatusBar(false)
+	m.indexList.SetFilterState(list.Unfiltered)
 	m.indexList.DisableQuitKeybindings()
 	m.applyLayout()
-
-	return nil
 }
 
 // addIndex appends a placeholder entry for a .par2 file being created
@@ -312,6 +329,34 @@ func findListItem[T any](items []list.Item, title string, getTitle func(T) strin
 	// no item found is possible scenario if dir is changed while some files are still processing
 	var zero T
 	return -1, zero
+}
+
+// updateIndexItem finds an index list entry by the par2 file name, applies
+// mutate, recomputes the description from the updated fields and repaints
+// the list. It reports whether the entry was found — it may be gone if the
+// directory changed while the task was running. The description is
+// recomputed after the mutation because it renders the status text.
+func (m *Model) updateIndexItem(par2Filename string, mutate func(*indexListItem)) bool {
+	idx, item := findListItem(m.indexList.Items(), par2Filename, func(it indexListItem) string { return it.par2Filename })
+	if idx == -1 {
+		return false
+	}
+	mutate(&item)
+	item.desc = formatIndexItemDesc(item, m.indexListExpanded)
+	m.indexList.SetItem(idx, item)
+	return true
+}
+
+// updateFileItem finds a file list entry by title, applies mutate and
+// repaints the list, with the same not-found guarantee as updateIndexItem
+func (m *Model) updateFileItem(title string, mutate func(*fileListItem)) bool {
+	idx, item := findListItem(m.fileList.Items(), title, func(fi fileListItem) string { return fi.title })
+	if idx == -1 {
+		return false
+	}
+	mutate(&item)
+	m.fileList.SetItem(idx, item)
+	return true
 }
 
 func findDirIndex(items []list.Item, dirName string) int {
