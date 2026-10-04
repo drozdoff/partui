@@ -13,20 +13,17 @@ import (
 
 	gopar "github.com/akalin/gopar/par2"
 	tea "github.com/charmbracelet/bubbletea"
-	"go.etcd.io/bbolt"
 )
 
-// ErrStoreUnavailable is returned by index store operations when the
-// database could not be opened and the app runs in degraded mode
-var ErrStoreUnavailable = errors.New("index store unavailable")
-
 // App owns all application-level dependencies and state that used to live in
-// package variables: the logger, the index database, the cancellation context,
-// the worker semaphore and the running tea.Program. There is one App per
-// process; both main and Model hold a pointer to it.
+// package variables: the logger, the index store, the PAR2 runner, the clock,
+// the cancellation context, the worker semaphore and the running tea.Program.
+// There is one App per process; both main and Model hold a pointer to it.
 type App struct {
 	logger *slog.Logger
-	db     *bbolt.DB
+	store  IndexStore
+	par2   Par2Runner
+	clock  func() time.Time
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -43,12 +40,17 @@ type App struct {
 	program *tea.Program
 }
 
-// NewApp creates an App with default settings
+// NewApp creates an App with default settings: a degraded (noop) store —
+// run() replaces it with a real bbolt store on success — the real gopar
+// runner and the wall clock.
 func NewApp(logger *slog.Logger) *App {
 	numProcs := runtime.GOMAXPROCS(-1)
 	ctx, cancel := context.WithCancel(context.Background())
 	return &App{
 		logger:   logger,
+		store:    newNoopStore(logger),
+		par2:     goparRunner{},
+		clock:    time.Now,
 		ctx:      ctx,
 		cancel:   cancel,
 		workers:  make(chan struct{}, numProcs-1),
@@ -56,77 +58,52 @@ func NewApp(logger *slog.Logger) *App {
 	}
 }
 
+// now returns the injected or wall-clock time
+func (a *App) now() time.Time {
+	if a.clock == nil {
+		return time.Now()
+	}
+	return a.clock()
+}
+
 // TODO: make percentage configurable
 const percentage = 5
 
 // Shutdown cancels the app context, waits for background goroutines and only
-// then closes the index database — strictly in that order, so no goroutine
+// then closes the index store — strictly in that order, so no goroutine
 // can write into a closed database.
 func (a *App) Shutdown() {
 	a.cancel()
 	a.wg.Wait()
-	if a.db != nil {
-		if err := a.db.Close(); err != nil {
-			a.logger.Warn("failed to close index database", slog.String("error", err.Error()))
-		}
-		a.db = nil
+	if err := a.store.Close(); err != nil && !errors.Is(err, ErrStoreUnavailable) {
+		a.logger.Warn("failed to close index store", slog.String("error", err.Error()))
 	}
+	a.store = newNoopStore(a.logger)
 	a.logger.Info("PartUI shutting down")
-}
-
-// putIndexSafe stores an index in the database. In degraded mode (the db
-// failed to open) it is a no-op returning ErrStoreUnavailable.
-func (a *App) putIndexSafe(dir, filename string, status index.Status, verifiedAt time.Time) error {
-	if a.db == nil {
-		return ErrStoreUnavailable
-	}
-	return index.PutIndex(a.db, dir, filename, status, verifiedAt)
-}
-
-// updateIndexStatusSafe updates the status of an existing index, preserving
-// LastVerified. In degraded mode it is a no-op returning ErrStoreUnavailable.
-func (a *App) updateIndexStatusSafe(dir, filename string, status index.Status) error {
-	if a.db == nil {
-		return ErrStoreUnavailable
-	}
-	return index.UpdateIndexStatus(a.db, dir, filename, status)
-}
-
-// allIndexesSafe returns all indexes from the database. In degraded mode it
-// returns ErrStoreUnavailable.
-func (a *App) allIndexesSafe() ([]index.IndexDescriptor, error) {
-	if a.db == nil {
-		return nil, ErrStoreUnavailable
-	}
-	return index.All(a.db)
 }
 
 // calculateBottomPanelStats computes statistics for the bottom panel.
 // A failed query (or degraded mode) is reported via BottomPanel.storeErr
 // instead of silently showing zeros.
 func (a *App) calculateBottomPanelStats() BottomPanel {
-	if a.db == nil {
-		return BottomPanel{storeErr: ErrStoreUnavailable}
-	}
-
 	// Get total count
-	totalCount, err := index.CountAll(a.db)
+	totalCount, err := a.store.Count()
 	if err != nil {
-		a.logger.Warn("failed to count indexes", slog.String("error", err.Error()))
+		a.logStoreError("failed to count indexes", err)
 		return BottomPanel{storeErr: err}
 	}
 
 	// Get damaged items
-	damagedItems, err := index.GetDamaged(a.db)
+	damagedItems, err := a.store.Damaged()
 	if err != nil {
-		a.logger.Warn("failed to get damaged indexes", slog.String("error", err.Error()))
+		a.logStoreError("failed to get damaged indexes", err)
 		return BottomPanel{storeErr: err}
 	}
 
 	// Get all indexes to count processing ones
-	allIndexes, err := index.All(a.db)
+	allIndexes, err := a.store.All()
 	if err != nil {
-		a.logger.Warn("failed to get all indexes", slog.String("error", err.Error()))
+		a.logStoreError("failed to get all indexes", err)
 		return BottomPanel{storeErr: err}
 	}
 
@@ -151,6 +128,15 @@ func (a *App) calculateBottomPanelStats() BottomPanel {
 		processingCount: processingCount,
 		damagedItems:    damaged,
 	}
+}
+
+// logStoreError logs a store failure; the degraded-mode sentinel is not
+// logged here — noopStore announces it once on its own
+func (a *App) logStoreError(msg string, err error) {
+	if errors.Is(err, ErrStoreUnavailable) {
+		return
+	}
+	a.logger.Warn(msg, slog.String("error", err.Error()))
 }
 
 func (a *App) createParFiles(dir string, title string, size uint64) {
@@ -183,7 +169,7 @@ func (a *App) createParFiles(dir string, title string, size uint64) {
 		CreateDelegate:  gopar.DoNothingCreateDelegate{},
 	}
 
-	err := gopar.Create(parPath, []string{filePath}, options)
+	err := a.par2.Create(parPath, []string{filePath}, options)
 	if err != nil {
 		a.logger.Error("PAR2 creation failed",
 			slog.String("dir", dir),
@@ -244,7 +230,7 @@ func (a *App) verifyParFiles(dir string, item indexListItem) {
 		NumGoroutines:  a.numProcs,
 		VerifyDelegate: &par2.FilenameCollector{},
 	}
-	res, err := gopar.Verify(parPath, options)
+	res, err := a.par2.Verify(parPath, options)
 
 	msg := indexVerifyFinishedMsg{
 		dir:          dir,

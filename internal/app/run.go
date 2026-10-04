@@ -40,13 +40,13 @@ func run(logger *slog.Logger) error {
 	}
 
 	app := NewApp(logger)
-	// Shutdown cancels the context, waits for goroutines and closes the db
-	// — strictly in that order
+	// Shutdown cancels the context, waits for goroutines and closes the
+	// store — strictly in that order
 	defer app.Shutdown()
 
-	// Initialize the index database; on failure the app keeps running in
-	// degraded mode without the index memory
-	db, err := index.OpenDB(index.GetDBPath())
+	// Initialize the index store; on failure the app keeps running in
+	// degraded mode (noopStore) without the index memory
+	store, err := newBboltStore(index.GetDBPath())
 	if err != nil {
 		logger.Error("failed to open index database",
 			slog.String("db_path", index.GetDBPath()),
@@ -54,7 +54,7 @@ func run(logger *slog.Logger) error {
 	} else {
 		logger.Debug("index database opened",
 			slog.String("db_path", index.GetDBPath()))
-		app.db = db
+		app.store = store
 	}
 
 	m := NewModel(app)
@@ -68,30 +68,27 @@ func run(logger *slog.Logger) error {
 
 	// Reverify old indexes BEFORE starting the UI
 	// This runs in the main thread as required
-	if app.db != nil {
-		threshold := time.Now().Add(-ReverifyThreshold)
-		oldIndexes, err := index.GetOldIndexes(app.db, threshold)
-		if err != nil {
-			logger.Warn("failed to get old indexes",
-				slog.String("error", err.Error()))
-		} else if len(oldIndexes) > 0 {
-			logger.Info("found indexes requiring re-verification",
-				slog.Int("count", len(oldIndexes)),
-				slog.Duration("threshold", ReverifyThreshold))
+	threshold := app.now().Add(-ReverifyThreshold)
+	oldIndexes, err := app.store.Old(threshold)
+	if err != nil {
+		app.logStoreError("failed to get old indexes", err)
+	} else if len(oldIndexes) > 0 {
+		logger.Info("found indexes requiring re-verification",
+			slog.Int("count", len(oldIndexes)),
+			slog.Duration("threshold", ReverifyThreshold))
 
-			// Start verify workers for old indexes
-			for _, idx := range oldIndexes {
-				// set old indexes status to processing
-				index.UpdateIndexStatus(app.db, idx.Dir, idx.Filename, index.StatusProcessing)
+		// Start verify workers for old indexes
+		for _, idx := range oldIndexes {
+			// set old indexes status to processing
+			app.store.UpdateStatus(idx.Dir, idx.Filename, index.StatusProcessing)
 
-				// start verify goroutine
-				app.wg.Add(1)
-				go app.verifyParFiles(idx.Dir, indexListItem{
-					par2Filename: idx.Filename,
-				})
-			}
-			m.bottomPanel = app.calculateBottomPanelStats()
+			// start verify goroutine
+			app.wg.Add(1)
+			go app.verifyParFiles(idx.Dir, indexListItem{
+				par2Filename: idx.Filename,
+			})
 		}
+		m.bottomPanel = app.calculateBottomPanelStats()
 	}
 
 	if _, err := p.Run(); err != nil {

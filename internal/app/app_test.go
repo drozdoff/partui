@@ -1,78 +1,59 @@
 package app
 
 import (
-	"io"
-	"log/slog"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.etcd.io/bbolt"
-
-	"partui/internal/index"
 )
 
-// newTestApp returns an App with a discard logger and a nil db,
-// suitable for tests that don't touch the database
+// newTestApp returns an App with a discard logger, a map-backed fake store
+// and a fake PAR2 runner — no database and no filesystem access
 func newTestApp() *App {
-	app := NewApp(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	app := NewApp(discardLogger())
 	// a buffered semaphore keeps launched goroutines from deadlocking
 	// on machines with GOMAXPROCS=1
 	app.workers = make(chan struct{}, 1)
+	app.store = newFakeStore()
+	app.par2 = newFakePar2()
 	return app
 }
 
-func TestApp_StoreWrappers_NilDB(t *testing.T) {
+// newDegradedApp returns an App whose store is a noopStore, as after a
+// failed database open
+func newDegradedApp() *App {
 	app := newTestApp()
+	app.store = newNoopStore(app.logger)
+	return app
+}
 
-	err := app.putIndexSafe("/d", "f.par2", index.StatusOK, time.Now())
-	assert.ErrorIs(t, err, ErrStoreUnavailable)
-
-	err = app.updateIndexStatusSafe("/d", "f.par2", index.StatusProcessing)
-	assert.ErrorIs(t, err, ErrStoreUnavailable)
-
-	_, err = app.allIndexesSafe()
-	assert.ErrorIs(t, err, ErrStoreUnavailable)
-
+func TestApp_Shutdown_NoopStore_NoPanic(t *testing.T) {
+	app := newDegradedApp()
 	assert.NotPanics(t, func() { app.Shutdown() })
 }
 
-func TestApp_StoreWrappers_WithDB(t *testing.T) {
-	db, err := index.OpenDB(filepath.Join(t.TempDir(), "test.db"))
+func TestApp_Shutdown_ClosesStore(t *testing.T) {
+	st, err := newBboltStore(filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
 
 	app := newTestApp()
-	app.db = db
-
-	now := time.Now()
-	assert.NoError(t, app.putIndexSafe("/d", "f.par2", index.StatusOK, now))
-
-	desc, err := index.GetIndex(db, "/d", "f.par2")
-	require.NoError(t, err)
-	require.NotNil(t, desc)
-	assert.Equal(t, index.StatusOK, desc.Status)
-
-	assert.NoError(t, app.updateIndexStatusSafe("/d", "f.par2", index.StatusDamaged))
-	desc, err = index.GetIndex(db, "/d", "f.par2")
-	require.NoError(t, err)
-	require.NotNil(t, desc)
-	assert.Equal(t, index.StatusDamaged, desc.Status)
-
-	all, err := app.allIndexesSafe()
-	assert.NoError(t, err)
-	assert.Len(t, all, 1)
+	app.store = st
 
 	app.Shutdown()
 
-	// any further operation must fail: the db is closed by Shutdown
-	assert.Error(t, db.View(func(tx *bbolt.Tx) error { return nil }))
+	// any further operation must fail: the database is closed by Shutdown
+	_, err = st.All()
+	assert.Error(t, err)
 }
 
-func TestApp_Shutdown_NilDB_NoPanic(t *testing.T) {
-	app := newTestApp()
-	assert.NotPanics(t, func() { app.Shutdown() })
+func TestApp_DegradedMode_BottomPanel(t *testing.T) {
+	app := newDegradedApp()
+
+	bp := app.calculateBottomPanelStats()
+	assert.ErrorIs(t, bp.storeErr, ErrStoreUnavailable)
+	assert.Equal(t, 0, bp.totalCount)
+	assert.Equal(t, 0, bp.processingCount)
 }
 
 func TestBottomPanelView_StoreUnavailable(t *testing.T) {

@@ -14,15 +14,13 @@ package app
 // - index.PutIndex() - stores index in database
 
 import (
+	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
+	tea "github.com/charmbracelet/bubbletea"
 	"log/slog"
 	"os"
 	"partui/internal/index"
 	"path/filepath"
-	"time"
-
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -124,7 +122,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.indexList.SetItem(m.indexList.Index(), item)
 			m.indexList.CursorDown()
 
-			if err := m.app.updateIndexStatusSafe(item.dir, item.par2Filename, index.StatusProcessing); err != nil {
+			if err := m.app.store.UpdateStatus(item.dir, item.par2Filename, index.StatusProcessing); err != nil {
 				m.app.logger.Warn("failed to update index status in database", slog.String("error", err.Error()))
 			}
 			m.bottomPanel = m.app.calculateBottomPanelStats()
@@ -138,7 +136,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.indexListExpanded = true
 				m.focus = FocusIndex
-				indexes, err := m.app.allIndexesSafe()
+				indexes, err := m.app.store.All()
 				if err != nil {
 					m.app.logger.Warn("failed to load all indexes", slog.String("error", err.Error()))
 					return m, nil
@@ -220,7 +218,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Update indexes database. The record is about the .par2 file,
 		// not the source file: msg.title is the source file name
-		if err := m.app.putIndexSafe(msg.dir, msg.title+".par2", index.StatusOK, time.Now()); err != nil {
+		if err := m.app.store.Put(msg.dir, msg.title+".par2", index.StatusOK, m.app.now()); err != nil {
 			m.app.logger.Warn("failed to save index to database", slog.String("error", err.Error()))
 		}
 
@@ -230,7 +228,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if iiIndex != -1 {
 			ii.desc = formatIndexItemDesc(ii, m.indexListExpanded)
 			ii.status = index.StatusOK
-			ii.lastVerified = time.Now()
+			ii.lastVerified = m.app.now()
 			indexItems[iiIndex] = ii
 			m.indexList.SetItems(indexItems)
 		}
@@ -257,7 +255,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if iiIndex != -1 {
 			ii.desc = formatIndexItemDesc(ii, m.indexListExpanded)
 			ii.status = index.StatusDamaged
-			ii.lastVerified = time.Now()
+			ii.lastVerified = m.app.now()
 			indexItems[iiIndex] = ii
 			m.indexList.SetItems(indexItems)
 		}
@@ -274,12 +272,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// If directory is missing (StatusMissing), don't update LastVerified
 		if msg.status == index.StatusMissing {
-			err := m.app.updateIndexStatusSafe(msg.dir, title, msg.status)
+			err := m.app.store.UpdateStatus(msg.dir, title, msg.status)
 			if err != nil {
 				m.app.logger.Warn("failed to update index status in database", slog.String("error", err.Error()))
 			}
 		} else {
-			err := m.app.putIndexSafe(msg.dir, title, msg.status, time.Now())
+			err := m.app.store.Put(msg.dir, title, msg.status, m.app.now())
 			if err != nil {
 				m.app.logger.Warn("failed to save index to database", slog.String("error", err.Error()))
 			}
@@ -290,7 +288,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			item.status = msg.status
 			// Only update lastVerified if not StatusMissing
 			if msg.status != index.StatusMissing {
-				item.lastVerified = time.Now()
+				item.lastVerified = m.app.now()
 			}
 			item.desc = formatIndexItemDesc(item, m.indexListExpanded)
 			m.indexList.SetItem(idx, item)

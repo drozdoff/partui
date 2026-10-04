@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 )
@@ -198,28 +197,21 @@ func (m *Model) processIndexFiles(files []os.DirEntry) []list.Item {
 			}
 
 			// Save to database if available
-			if m.app.db != nil {
-				descriptor, err := index.GetIndex(m.app.db, m.currentDir, name)
+			descriptor, err := m.app.store.Get(m.currentDir, name)
+			switch {
+			case err == nil && descriptor != nil:
+				indexItem.status = descriptor.Status
+				indexItem.lastVerified = descriptor.LastVerified
+			case err == nil:
+				now := m.app.now()
+				err = m.app.store.Put(m.currentDir, name, index.StatusOK, now)
 				if err != nil {
-					m.app.logger.Warn("failed to check index in database",
-						slog.String("dir", m.currentDir),
-						slog.String("filename", name),
-						slog.String("error", err.Error()))
-				} else if descriptor != nil {
-					indexItem.status = descriptor.Status
-					indexItem.lastVerified = descriptor.LastVerified
+					m.app.logStoreError("failed to save index to database", err)
 				} else {
-					now := time.Now()
-					err = index.PutIndex(m.app.db, m.currentDir, name, index.StatusOK, now)
-					if err != nil {
-						m.app.logger.Warn("failed to save index to database",
-							slog.String("dir", m.currentDir),
-							slog.String("filename", name),
-							slog.String("error", err.Error()))
-					} else {
-						indexItem.lastVerified = now
-					}
+					indexItem.lastVerified = now
 				}
+			default:
+				m.app.logStoreError("failed to check index in database", err)
 			}
 
 			// Format description based on mode

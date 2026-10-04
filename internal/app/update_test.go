@@ -2,8 +2,8 @@ package app
 
 import (
 	"errors"
-	"path/filepath"
 	"testing"
+	"time"
 
 	"partui/internal/index"
 
@@ -271,10 +271,11 @@ func TestUpdate_EnterKey_EmptyList_NoPanic(t *testing.T) {
 	})
 }
 
-// Regression test for item 1.3: without a database (degraded mode) the
+// Regression test for item 1.3: without a store (degraded mode) the
 // completion messages must not panic.
 func TestUpdate_Messages_WithoutDB_NoPanic(t *testing.T) {
 	m := newTestModel()
+	m.app.store = newNoopStore(m.app.logger)
 
 	assert.NotPanics(t, func() {
 		_, _ = m.Update(parCreateFinishedMsg{dir: "/tmp/x", title: "a.txt"})
@@ -307,24 +308,70 @@ func TestUpdate_ParCreateFinished_UpdatesItems(t *testing.T) {
 
 // Regression test: parCreateFinishedMsg must store the index record under
 // the .par2 file name, not the source file name.
-func TestUpdate_ParCreateFinished_StoresPar2NameInDB(t *testing.T) {
-	db, err := index.OpenDB(filepath.Join(t.TempDir(), "test.db"))
-	require.NoError(t, err)
+func TestUpdate_ParCreateFinished_StoresPar2NameInStore(t *testing.T) {
 	app := newTestApp()
-	app.db = db
-	defer app.Shutdown()
-
 	m := NewModel(app)
 	m.currentDir = "/tmp/x"
 
 	_, _ = m.Update(parCreateFinishedMsg{dir: "/tmp/x", title: "a.txt"})
 
-	desc, err := index.GetIndex(db, "/tmp/x", "a.txt.par2")
+	desc, err := app.store.Get("/tmp/x", "a.txt.par2")
 	assert.NoError(t, err)
 	require.NotNil(t, desc, "index record must be stored under the .par2 name")
 	assert.Equal(t, index.StatusOK, desc.Status)
 
-	junk, err := index.GetIndex(db, "/tmp/x", "a.txt")
+	junk, err := app.store.Get("/tmp/x", "a.txt")
 	assert.NoError(t, err)
 	assert.Nil(t, junk, "no record must be stored under the source file name")
+}
+
+// Item 2.1 acceptance: the create path goes through the injected
+// Par2Runner, not through gopar directly.
+func TestUpdate_CreateKey_CallsPar2Runner(t *testing.T) {
+	m := newTestModel()
+	app := m.app
+	app.program = tea.NewProgram(m, tea.WithContext(app.ctx))
+	m.currentDir = "/tmp/x"
+	m.fileList.SetItems([]list.Item{fileListItem{title: "a.txt", size: 64000}})
+
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+
+	runner := app.par2.(*fakePar2)
+	select {
+	case parPath := <-runner.createdCh:
+		assert.Equal(t, "/tmp/x/a.txt.par2", parPath)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Par2Runner.Create was not called")
+	}
+
+	// the goroutine is parked sending the finished message to the idle
+	// program; cancel the context so it exits and wg.Wait returns
+	app.cancel()
+	app.wg.Wait()
+}
+
+// Item 2.1 acceptance: the verify path goes through the injected
+// Par2Runner as well.
+func TestUpdate_VerifyKey_CallsPar2Runner(t *testing.T) {
+	m := newTestModel()
+	app := m.app
+	app.program = tea.NewProgram(m, tea.WithContext(app.ctx))
+	m.focus = FocusIndex
+	dir := t.TempDir() // must exist: verify checks the directory first
+	m.indexList.SetItems([]list.Item{
+		indexListItem{par2Filename: "a.txt.par2", dir: dir, status: index.StatusOK},
+	})
+
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+
+	runner := app.par2.(*fakePar2)
+	select {
+	case parPath := <-runner.verifiedCh:
+		assert.Equal(t, dir+"/a.txt.par2", parPath)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Par2Runner.Verify was not called")
+	}
+
+	app.cancel()
+	app.wg.Wait()
 }
