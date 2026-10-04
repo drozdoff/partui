@@ -1,10 +1,38 @@
 package par2
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
+
+// TestCalculateBlockSize_Boundaries pins the block size at the size
+// boundaries and beyond. The expected values were captured from the
+// implementation before it was refactored into the blockCountLimits table
+// (item 3.1): any difference means the thresholds silently changed.
+func TestCalculateBlockSize_Boundaries(t *testing.T) {
+	tests := []struct {
+		fSize uint64
+		want  int
+	}{
+		{0, 8},
+		{1, 8},
+		{1000, 4},
+		{999999, 7144},                   // just under the 1e6 boundary: blockCountMax = 7
+		{1000000, 3336},                  // exactly on the 1e6 boundary: blockCountMax = 15
+		{3999999, 13336},                 // just under the 4e6 boundary: blockCountMax = 15
+		{4000000, 6452},                  // exactly on the 4e6 boundary: blockCountMax = 31
+		{19999999, 32260},                // just under the 20e6 boundary: blockCountMax = 31
+		{20000000, 7876},                 // exactly on the 20e6 boundary: blockCountMax = 127
+		{1000000000, 393704},             // 1 GB
+		{math.MaxInt64, 726249766681480}, // huge file: includes the current intermediate overflow
+	}
+
+	for _, tc := range tests {
+		assert.Equal(t, tc.want, CalculateBlockSize(tc.fSize, 5), "fSize=%d", tc.fSize)
+	}
+}
 
 func TestCalculateBlockSize_SmallFile(t *testing.T) {
 	// File size less than 1MB - blockCountMax = 7

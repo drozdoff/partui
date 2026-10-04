@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"partui/internal/config"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -11,7 +13,7 @@ import (
 // newTestApp returns an App with a discard logger, a map-backed fake store
 // and a fake PAR2 runner — no database and no filesystem access
 func newTestApp() *App {
-	app := NewApp(discardLogger())
+	app := NewApp(config.Defaults(), discardLogger())
 	// a buffered semaphore keeps launched goroutines from deadlocking
 	// on machines with GOMAXPROCS=1
 	app.workers = make(chan struct{}, 1)

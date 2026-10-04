@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"partui/internal/config"
 	"partui/internal/index"
 	"partui/internal/par2"
 	"runtime"
@@ -16,10 +17,12 @@ import (
 )
 
 // App owns all application-level dependencies and state that used to live in
-// package variables: the logger, the index store, the PAR2 runner, the clock,
-// the cancellation context, the worker semaphore and the running tea.Program.
-// There is one App per process; both main and Model hold a pointer to it.
+// package variables: the configuration, the logger, the index store, the
+// PAR2 runner, the clock, the cancellation context, the worker semaphore and
+// the running tea.Program. There is one App per process; both main and Model
+// hold a pointer to it.
 type App struct {
+	cfg    config.Config
 	logger *slog.Logger
 	store  IndexStore
 	par2   Par2Runner
@@ -29,10 +32,9 @@ type App struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	// workers is a counting semaphore for any kind of workers
+	// workers is a counting semaphore for any kind of workers;
+	// the capacity is cfg.MaxWorkers
 	workers chan struct{}
-
-	numProcs int
 
 	// program is assigned right after tea.NewProgram and before any
 	// goroutine is started, so no extra synchronization is needed
@@ -40,21 +42,20 @@ type App struct {
 	program *tea.Program
 }
 
-// NewApp creates an App with default settings: a degraded (noop) store —
-// run() replaces it with a real bbolt store on success — the real gopar
-// runner and the wall clock.
-func NewApp(logger *slog.Logger) *App {
-	numProcs := runtime.GOMAXPROCS(-1)
+// NewApp creates an App with the given configuration: a degraded (noop)
+// store — run() replaces it with a real bbolt store on success — the real
+// gopar runner and the wall clock.
+func NewApp(cfg config.Config, logger *slog.Logger) *App {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &App{
-		logger:   logger,
-		store:    newNoopStore(logger),
-		par2:     goparRunner{},
-		clock:    time.Now,
-		ctx:      ctx,
-		cancel:   cancel,
-		workers:  make(chan struct{}, numProcs-1),
-		numProcs: numProcs,
+		cfg:     cfg,
+		logger:  logger,
+		store:   newNoopStore(logger),
+		par2:    goparRunner{},
+		clock:   time.Now,
+		ctx:     ctx,
+		cancel:  cancel,
+		workers: make(chan struct{}, cfg.MaxWorkers),
 	}
 }
 
@@ -65,9 +66,6 @@ func (a *App) now() time.Time {
 	}
 	return a.clock()
 }
-
-// TODO: make percentage configurable
-const percentage = 5
 
 // Shutdown cancels the app context, waits for background goroutines and only
 // then closes the index store — strictly in that order, so no goroutine
@@ -163,9 +161,9 @@ func (a *App) createParFiles(dir string, title string, size uint64) {
 	parPath := filePath + ".par2"
 
 	options := gopar.CreateOptions{
-		SliceByteCount:  par2.CalculateBlockSize(size, percentage),
+		SliceByteCount:  par2.CalculateBlockSize(size, uint64(a.cfg.Percentage)),
 		NumParityShards: -1,
-		NumGoroutines:   a.numProcs,
+		NumGoroutines:   runtime.GOMAXPROCS(0),
 		CreateDelegate:  gopar.DoNothingCreateDelegate{},
 	}
 
@@ -227,7 +225,7 @@ func (a *App) verifyParFiles(dir string, item indexListItem) {
 	// TODO: propper logging
 	parPath := dir + "/" + item.par2Filename
 	options := gopar.VerifyOptions{
-		NumGoroutines:  a.numProcs,
+		NumGoroutines:  runtime.GOMAXPROCS(0),
 		VerifyDelegate: &par2.FilenameCollector{},
 	}
 	res, err := a.par2.Verify(parPath, options)

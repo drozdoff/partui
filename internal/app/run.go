@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"partui/internal/config"
 	"partui/internal/index"
 	"path/filepath"
 	"strings"
@@ -11,11 +12,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
-
-// ReverifyThreshold defines how old an index must be to require re-verification on startup
-// Default: 30 days (can be changed here or made configurable)
-// const ReverifyThreshold = 30 * 24 * time.Hour
-const ReverifyThreshold = 5 * 24 * time.Hour
 
 // Run initializes logging and runs the application. It reports an error only
 // for fatal startup problems; the error is logged here as well, the caller
@@ -40,7 +36,7 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("resolve executable path: %w", err)
 	}
 
-	app := NewApp(logger)
+	app := NewApp(config.Defaults(), logger)
 	// Shutdown cancels the context, waits for goroutines and closes the
 	// store — strictly in that order
 	defer app.Shutdown()
@@ -84,14 +80,15 @@ func run(logger *slog.Logger) error {
 
 	// Reverify old indexes BEFORE starting the UI
 	// This runs in the main thread as required
-	threshold := app.now().Add(-ReverifyThreshold)
+	reverifyAfter := time.Duration(app.cfg.ReverifyDays) * 24 * time.Hour
+	threshold := app.now().Add(-reverifyAfter)
 	oldIndexes, err := app.store.Old(threshold)
 	if err != nil {
 		app.logStoreError("failed to get old indexes", err)
 	} else if len(oldIndexes) > 0 {
 		logger.Info("found indexes requiring re-verification",
 			slog.Int("count", len(oldIndexes)),
-			slog.Duration("threshold", ReverifyThreshold))
+			slog.Duration("threshold", reverifyAfter))
 
 		// Start verify workers for old indexes
 		for _, idx := range oldIndexes {
