@@ -258,13 +258,14 @@ func (m *Model) collapseIndexList() tea.Cmd {
 
 // addIndex appends a placeholder entry for a .par2 file being created
 func (m *Model) addIndex(par2Filename string) {
-	indexItems := m.indexList.Items()
-	indexItems = append(indexItems, indexListItem{
+	item := indexListItem{
 		par2Filename: par2Filename,
-		desc:         index.StatusDisplay(index.StatusProcessing),
+		dir:          m.currentDir,
 		status:       index.StatusProcessing,
-	})
-	m.indexList.SetItems(indexItems)
+	}
+	item.desc = formatIndexItemDesc(item, m.indexListExpanded)
+	indexItems := m.indexList.Items()
+	m.indexList.SetItems(append(indexItems, item))
 }
 
 // selectedFileItem returns the selected item of the file list and reports

@@ -28,9 +28,11 @@ func (m *Model) handleParCreateFinished(msg parCreateFinishedMsg) tea.Cmd {
 	indexItems := m.indexList.Items()
 	iiIndex, ii := findListItem(indexItems, title+".par2", func(ii indexListItem) string { return ii.par2Filename })
 	if iiIndex != -1 {
-		ii.desc = formatIndexItemDesc(ii, m.indexListExpanded)
+		// status and lastVerified must be updated before the description:
+		// the description line renders the status text
 		ii.status = index.StatusOK
 		ii.lastVerified = m.app.now()
+		ii.desc = formatIndexItemDesc(ii, m.indexListExpanded)
 		indexItems[iiIndex] = ii
 		m.indexList.SetItems(indexItems)
 	}
@@ -62,9 +64,9 @@ func (m *Model) handleParCreateError(msg parCreateErrorMsg) tea.Cmd {
 	indexItems := m.indexList.Items()
 	iiIndex, ii := findListItem(indexItems, title+".par2", func(ii indexListItem) string { return ii.par2Filename })
 	if iiIndex != -1 {
-		ii.desc = formatIndexItemDesc(ii, m.indexListExpanded)
 		ii.status = index.StatusDamaged
 		ii.lastVerified = m.app.now()
+		ii.desc = formatIndexItemDesc(ii, m.indexListExpanded)
 		indexItems[iiIndex] = ii
 		m.indexList.SetItems(indexItems)
 	}

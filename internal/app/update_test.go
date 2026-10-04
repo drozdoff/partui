@@ -304,6 +304,34 @@ func TestUpdate_ParCreateFinished_UpdatesItems(t *testing.T) {
 
 	iit := m.indexList.Items()[0].(indexListItem)
 	assert.Equal(t, index.StatusOK, iit.status)
+	// the description must show the new status, not a stale "Processing"
+	assert.Equal(t, "/tmp/x | OK", iit.desc)
+}
+
+// Regression: the placeholder added by `c` carries the directory name, and
+// the finished message re-renders its status text from "Processing" to "OK".
+// Both were broken before: the placeholder had no dir (rendering a nameless
+// " | Processing") and the description was computed before the status
+// update, freezing the text on "Processing" forever.
+func TestUpdate_CreateThenFinished_UpdatesStatusText(t *testing.T) {
+	m := newTestModel()
+	m.app.cancel() // the goroutine must exit without work
+	m.currentDir = "/tmp/x"
+	m.fileList.SetItems([]list.Item{fileListItem{title: "a.txt", size: 10}})
+
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+
+	ph := m.indexList.Items()[0].(indexListItem)
+	assert.Equal(t, index.StatusProcessing, ph.status)
+	assert.Equal(t, "/tmp/x", ph.dir)
+	assert.Equal(t, "/tmp/x | Processing", ph.desc)
+
+	_, _ = m.Update(parCreateFinishedMsg{dir: "/tmp/x", title: "a.txt"})
+
+	it := m.indexList.Items()[0].(indexListItem)
+	assert.Equal(t, index.StatusOK, it.status)
+	assert.Equal(t, "/tmp/x | OK", it.desc)
+	m.app.wg.Wait()
 }
 
 // Regression test: parCreateFinishedMsg must store the index record under
