@@ -29,15 +29,27 @@ type DamagedIndex struct {
 	dir          string
 }
 
-func (m *Model) View() string {
-	style := lipgloss.NewStyle()
+// handleWindowSize stores the new size and applies it to the lists
+func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) tea.Cmd {
+	m.width = msg.Width
+	m.height = msg.Height
 
-	// Expanded mode - show full-screen index list
+	m.applyLayout()
+
+	var cmd tea.Cmd
+	m.indexList.Update(msg)
+	m.fileList, cmd = m.fileList.Update(msg)
+	return cmd
+}
+
+// applyLayout sizes the lists for the current mode. It runs on window resize
+// and whenever the expanded mode is toggled, so that View stays free of
+// state changes.
+func (m *Model) applyLayout() {
 	if m.indexListExpanded {
 		m.indexList.SetHeight(m.height)
 		m.indexList.SetWidth(m.width)
-		bottomPanel := m.bottomPanel.View(m.width)
-		return lipgloss.JoinVertical(lipgloss.Left, m.indexList.View(), bottomPanel)
+		return
 	}
 
 	w := m.width / 2
@@ -50,6 +62,16 @@ func (m *Model) View() string {
 
 	m.indexList.SetHeight(h)
 	m.indexList.SetWidth(w)
+}
+
+func (m *Model) View() string {
+	style := lipgloss.NewStyle()
+
+	// Expanded mode - show full-screen index list
+	if m.indexListExpanded {
+		bottomPanel := m.bottomPanel.View(m.width)
+		return lipgloss.JoinVertical(lipgloss.Left, m.indexList.View(), bottomPanel)
+	}
 
 	// Apply focus styling to borders
 	leftStyle := style

@@ -156,6 +156,8 @@ func (m *Model) buildModelForDirectory(dir string) error {
 	// Initialize bottom panel statistics
 	m.bottomPanel = m.app.calculateBottomPanelStats()
 
+	m.applyLayout()
+
 	return nil
 }
 
