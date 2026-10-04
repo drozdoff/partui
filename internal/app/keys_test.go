@@ -178,6 +178,25 @@ func TestKeys_Table(t *testing.T) {
 			check: func(t *testing.T, m *Model) {},
 		},
 		{
+			name: "v on a record without .par2 extension is refused",
+			setup: func(t *testing.T, m *Model) {
+				m.focus = FocusIndex
+				m.indexList.SetItems([]list.Item{
+					indexListItem{par2Filename: "style.css", dir: "/d", status: index.StatusOK},
+				})
+			},
+			key: "v",
+			check: func(t *testing.T, m *Model) {
+				// the entry must not enter processing, nothing is written
+				it := m.indexList.Items()[0].(indexListItem)
+				assert.Equal(t, index.StatusOK, it.status)
+
+				desc, err := m.app.store.Get("/d", "style.css")
+				require.NoError(t, err)
+				assert.Nil(t, desc)
+			},
+		},
+		{
 			name: "v is ignored while the file list has focus",
 			setup: func(t *testing.T, m *Model) {
 				m.focus = FocusFile

@@ -22,6 +22,7 @@ type IndexStore interface {
 	Get(dir, filename string) (*index.IndexDescriptor, error)
 	Put(dir, filename string, status index.Status, verifiedAt time.Time) error
 	UpdateStatus(dir, filename string, status index.Status) error
+	Delete(dir, filename string) error
 	All() ([]index.IndexDescriptor, error)
 	Old(threshold time.Time) ([]index.IndexDescriptor, error)
 	Damaged() ([]index.IndexDescriptor, error)
@@ -56,6 +57,10 @@ func (s *bboltStore) UpdateStatus(dir, filename string, status index.Status) err
 	return index.UpdateIndexStatus(s.db, dir, filename, status)
 }
 
+func (s *bboltStore) Delete(dir, filename string) error {
+	return index.DeleteIndex(s.db, dir, filename)
+}
+
 func (s *bboltStore) All() ([]index.IndexDescriptor, error) {
 	return index.All(s.db)
 }
@@ -74,6 +79,28 @@ func (s *bboltStore) Count() (int, error) {
 
 func (s *bboltStore) Close() error {
 	return s.db.Close()
+}
+
+// cleanupNonPar2Records deletes index records whose file name cannot be a
+// PAR2 file. The pre-refactoring binary stored records under source file
+// names (without the ".par2" extension); such records can never be verified
+// and only pollute the index list. It runs on every startup, is idempotent
+// and returns the removed descriptors.
+func cleanupNonPar2Records(store IndexStore) ([]index.IndexDescriptor, error) {
+	all, err := store.All()
+	if err != nil {
+		return nil, err
+	}
+	var removed []index.IndexDescriptor
+	for _, d := range all {
+		if !isPar2Name(d.Filename) {
+			if err := store.Delete(d.Dir, d.Filename); err != nil {
+				return removed, err
+			}
+			removed = append(removed, d)
+		}
+	}
+	return removed, nil
 }
 
 // noopStore is the degraded-mode IndexStore: every operation fails with
@@ -104,6 +131,10 @@ func (s *noopStore) Put(dir, filename string, status index.Status, verifiedAt ti
 }
 
 func (s *noopStore) UpdateStatus(dir, filename string, status index.Status) error {
+	return s.unavailable()
+}
+
+func (s *noopStore) Delete(dir, filename string) error {
 	return s.unavailable()
 }
 

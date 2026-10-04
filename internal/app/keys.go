@@ -191,6 +191,14 @@ func (m *Model) verifySelected() tea.Cmd {
 	if !ok {
 		return nil
 	}
+	// only .par2 files can be verified; the expanded list may still
+	// contain legacy records stored under source file names
+	if !isPar2Name(item.par2Filename) {
+		m.app.logger.Warn("refusing to verify a record without .par2 extension",
+			slog.String("dir", item.dir),
+			slog.String("par2_file", item.par2Filename))
+		return nil
+	}
 	item.status = index.StatusProcessing
 	item.desc = formatIndexItemDesc(item, m.indexListExpanded)
 	m.indexList.SetItem(m.indexList.Index(), item)

@@ -172,6 +172,12 @@ func isParIndex(filename string) bool {
 	return !volPattern.MatchString(lf)
 }
 
+// isPar2Name reports whether the name can denote a PAR2 file at all. Only
+// such names may be verified and stored in the index database.
+func isPar2Name(filename string) bool {
+	return strings.HasSuffix(strings.ToLower(filename), ".par2")
+}
+
 func hiddenFile(name string) bool {
 	// ignore hidden files and .par2 files
 	return strings.HasPrefix(name, ".") || filepath.Ext(name) == ".par2"

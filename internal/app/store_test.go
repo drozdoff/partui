@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -101,5 +102,66 @@ func TestBboltStore_RoundTrip(t *testing.T) {
 
 	// operations after Close must fail
 	_, err = st.All()
+	assert.Error(t, err)
+}
+
+func TestBboltStore_Delete(t *testing.T) {
+	st, err := newBboltStore(filepath.Join(t.TempDir(), "test.db"))
+	require.NoError(t, err)
+	defer st.Close()
+
+	at := time.Unix(1700000000, 0)
+	require.NoError(t, st.Put("/data", "a.par2", index.StatusOK, at))
+	require.NoError(t, st.Put("/data", "b.par2", index.StatusDamaged, at))
+
+	// deleting a missing record is a no-op
+	require.NoError(t, st.Delete("/data", "missing.par2"))
+
+	require.NoError(t, st.Delete("/data", "b.par2"))
+
+	desc, err := st.Get("/data", "b.par2")
+	require.NoError(t, err)
+	assert.Nil(t, desc)
+
+	// the damaged bucket entry is removed together with the record
+	damaged, err := st.Damaged()
+	require.NoError(t, err)
+	assert.Empty(t, damaged)
+
+	all, err := st.All()
+	require.NoError(t, err)
+	require.Len(t, all, 1)
+	assert.Equal(t, "a.par2", all[0].Filename)
+}
+
+func TestCleanupNonPar2Records(t *testing.T) {
+	at := time.Unix(1700000000, 0)
+
+	st := newFakeStore()
+	require.NoError(t, st.Put("/data", "a.par2", index.StatusOK, at))
+	require.NoError(t, st.Put("/data", "style.css", index.StatusUnverifiable, at))
+	require.NoError(t, st.Put("/data", "readme", index.StatusUnverifiable, at))
+
+	removed, err := cleanupNonPar2Records(st)
+	require.NoError(t, err)
+	require.Len(t, removed, 2)
+
+	// only the .par2 record survives
+	desc, err := st.Get("/data", "a.par2")
+	require.NoError(t, err)
+	require.NotNil(t, desc)
+
+	desc, err = st.Get("/data", "style.css")
+	require.NoError(t, err)
+	assert.Nil(t, desc)
+
+	// idempotent: the second pass removes nothing
+	removed, err = cleanupNonPar2Records(st)
+	require.NoError(t, err)
+	assert.Empty(t, removed)
+
+	// a failing store reports the error
+	st.err = errors.New("boom")
+	_, err = cleanupNonPar2Records(st)
 	assert.Error(t, err)
 }

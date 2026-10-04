@@ -6,6 +6,7 @@ import (
 	"os"
 	"partui/internal/index"
 	"path/filepath"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -55,6 +56,21 @@ func run(logger *slog.Logger) error {
 		logger.Debug("index database opened",
 			slog.String("db_path", index.GetDBPath()))
 		app.store = store
+
+		// Remove records stored under source file names by the
+		// pre-refactoring binary; they can never be verified
+		if removed, err := cleanupNonPar2Records(app.store); err != nil {
+			logger.Warn("failed to clean up index records",
+				slog.String("error", err.Error()))
+		} else if len(removed) > 0 {
+			files := make([]string, 0, len(removed))
+			for _, d := range removed {
+				files = append(files, filepath.Join(d.Dir, d.Filename))
+			}
+			logger.Info("removed index records without .par2 extension",
+				slog.Int("count", len(removed)),
+				slog.String("files", strings.Join(files, ", ")))
+		}
 	}
 
 	m := NewModel(app)

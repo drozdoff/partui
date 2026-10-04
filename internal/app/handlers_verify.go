@@ -20,8 +20,13 @@ func (m *Model) handleVerifyFinished(msg indexVerifyFinishedMsg) tea.Cmd {
 
 	title := msg.par2Filename
 
-	// If directory is missing (StatusMissing), don't update LastVerified
-	if msg.status == index.StatusMissing {
+	// never persist records under names that cannot be a PAR2 file
+	if !isPar2Name(title) {
+		m.app.logger.Warn("refusing to store an index record without .par2 extension",
+			slog.String("dir", msg.dir),
+			slog.String("par2_file", title))
+	} else if msg.status == index.StatusMissing {
+		// If directory is missing (StatusMissing), don't update LastVerified
 		err := m.app.store.UpdateStatus(msg.dir, title, msg.status)
 		if err != nil {
 			m.app.logger.Warn("failed to update index status in database", slog.String("error", err.Error()))

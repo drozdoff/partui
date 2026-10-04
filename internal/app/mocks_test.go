@@ -127,6 +127,16 @@ func (s *fakeStore) Count() (int, error) {
 	return len(s.items), nil
 }
 
+func (s *fakeStore) Delete(dir, filename string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return s.err
+	}
+	delete(s.items, storeKey(dir, filename))
+	return nil
+}
+
 func (s *fakeStore) Close() error { return nil }
 
 // fakePar2 records Par2Runner calls; results can be injected per test.

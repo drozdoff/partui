@@ -222,6 +222,30 @@ func UpdateIndexStatus(db *bbolt.DB, dir, filename string, status Status) error 
 	})
 }
 
+// DeleteIndex removes the index record for dir+filename from all buckets.
+// Deleting a missing record is a no-op.
+func DeleteIndex(db *bbolt.DB, dir, filename string) error {
+	lookupKey := GenerateLookupKey(dir, filename)
+
+	return db.Update(func(tx *bbolt.Tx) error {
+		indexes := tx.Bucket(bucketName(BucketIndexes))
+		byPath := tx.Bucket(bucketName(BucketByPath))
+		damaged := tx.Bucket(bucketName(BucketDamaged))
+
+		oldKey := byPath.Get(lookupKey)
+		if oldKey == nil {
+			return nil
+		}
+		if err := indexes.Delete(oldKey); err != nil {
+			return err
+		}
+		if err := byPath.Delete(lookupKey); err != nil {
+			return err
+		}
+		return damaged.Delete(lookupKey)
+	})
+}
+
 // All retrieves all IndexDescriptors
 func All(db *bbolt.DB) ([]IndexDescriptor, error) {
 	var result []IndexDescriptor

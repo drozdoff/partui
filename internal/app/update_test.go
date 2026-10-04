@@ -353,6 +353,25 @@ func TestUpdate_ParCreateFinished_StoresPar2NameInStore(t *testing.T) {
 	assert.Nil(t, junk, "no record must be stored under the source file name")
 }
 
+// Regression: a verification result for a name that cannot be a PAR2 file
+// (legacy records written by the pre-refactoring binary) is shown in the
+// list but never persisted.
+func TestUpdate_VerifyFinished_NonPar2Name_NotStored(t *testing.T) {
+	m := newTestModel()
+	m.currentDir = "/tmp/x"
+
+	_, _ = m.Update(indexVerifyFinishedMsg{
+		dir:          "/tmp/x",
+		par2Filename: "style.css",
+		status:       index.StatusUnverifiable,
+		err:          errors.New("parPath must have a .par2 extension"),
+	})
+
+	desc, err := m.app.store.Get("/tmp/x", "style.css")
+	assert.NoError(t, err)
+	assert.Nil(t, desc, "no record must be stored for a non-.par2 name")
+}
+
 // Item 2.1 acceptance: the create path goes through the injected
 // Par2Runner, not through gopar directly.
 func TestUpdate_CreateKey_CallsPar2Runner(t *testing.T) {

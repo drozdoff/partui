@@ -571,3 +571,42 @@ func TestUpdateIndexStatus_NonExistent(t *testing.T) {
 	err = UpdateIndexStatus(db, "/nonexistent", "file.par2", StatusMissing)
 	require.NoError(t, err)
 }
+
+func TestDeleteIndex(t *testing.T) {
+	db, err := OpenDB(filepath.Join(t.TempDir(), "test.db"))
+	require.NoError(t, err)
+	defer CloseDB(db)
+
+	now := time.Now()
+	require.NoError(t, PutIndex(db, "/data", "a.par2", StatusOK, now))
+	require.NoError(t, PutIndex(db, "/data", "b.par2", StatusDamaged, now))
+
+	// damaged bucket holds b.par2 before deletion
+	err = db.View(func(tx *bbolt.Tx) error {
+		assert.Equal(t, 2, tx.Bucket(bucketName(BucketByPath)).Stats().KeyN)
+		return nil
+	})
+	require.NoError(t, err)
+
+	// delete a missing record is a no-op
+	require.NoError(t, DeleteIndex(db, "/data", "missing.par2"))
+
+	require.NoError(t, DeleteIndex(db, "/data", "b.par2"))
+
+	desc, err := GetIndex(db, "/data", "b.par2")
+	require.NoError(t, err)
+	assert.Nil(t, desc)
+
+	// the other record is untouched
+	desc, err = GetIndex(db, "/data", "a.par2")
+	require.NoError(t, err)
+	require.NotNil(t, desc)
+
+	// deleted from the primary bucket and the damaged bucket as well
+	err = db.View(func(tx *bbolt.Tx) error {
+		assert.Equal(t, 1, tx.Bucket(bucketName(BucketIndexes)).Stats().KeyN)
+		assert.Equal(t, 0, tx.Bucket(bucketName(BucketDamaged)).Stats().KeyN)
+		return nil
+	})
+	require.NoError(t, err)
+}
