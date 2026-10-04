@@ -80,54 +80,6 @@ func (a *App) Shutdown() {
 	a.logger.Info("PartUI shutting down")
 }
 
-// calculateBottomPanelStats computes statistics for the bottom panel.
-// A failed query (or degraded mode) is reported via BottomPanel.storeErr
-// instead of silently showing zeros.
-func (a *App) calculateBottomPanelStats() BottomPanel {
-	// Get total count
-	totalCount, err := a.store.Count()
-	if err != nil {
-		a.logStoreError("failed to count indexes", err)
-		return BottomPanel{storeErr: err}
-	}
-
-	// Get damaged items
-	damagedItems, err := a.store.Damaged()
-	if err != nil {
-		a.logStoreError("failed to get damaged indexes", err)
-		return BottomPanel{storeErr: err}
-	}
-
-	// Get all indexes to count processing ones
-	allIndexes, err := a.store.All()
-	if err != nil {
-		a.logStoreError("failed to get all indexes", err)
-		return BottomPanel{storeErr: err}
-	}
-
-	processingCount := 0
-	for _, idx := range allIndexes {
-		if idx.Status == index.StatusProcessing {
-			processingCount++
-		}
-	}
-
-	// Convert to DamagedIndex format
-	damaged := make([]DamagedIndex, len(damagedItems))
-	for i, d := range damagedItems {
-		damaged[i] = DamagedIndex{
-			par2Filename: d.Filename,
-			dir:          d.Dir,
-		}
-	}
-
-	return BottomPanel{
-		totalCount:      totalCount,
-		processingCount: processingCount,
-		damagedItems:    damaged,
-	}
-}
-
 // logStoreError logs a store failure; the degraded-mode sentinel is not
 // logged here — noopStore announces it once on its own
 func (a *App) logStoreError(msg string, err error) {

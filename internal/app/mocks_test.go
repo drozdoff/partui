@@ -103,30 +103,6 @@ func (s *fakeStore) Old(threshold time.Time) ([]index.IndexDescriptor, error) {
 	return old, nil
 }
 
-func (s *fakeStore) Damaged() ([]index.IndexDescriptor, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.err != nil {
-		return nil, s.err
-	}
-	var damaged []index.IndexDescriptor
-	for _, d := range s.items {
-		if d.Status == index.StatusDamaged {
-			damaged = append(damaged, d)
-		}
-	}
-	return damaged, nil
-}
-
-func (s *fakeStore) Count() (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.err != nil {
-		return 0, s.err
-	}
-	return len(s.items), nil
-}
-
 func (s *fakeStore) Delete(dir, filename string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

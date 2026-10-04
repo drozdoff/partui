@@ -38,7 +38,7 @@ func (m *Model) handleParCreateFinished(msg parCreateFinishedMsg) tea.Cmd {
 	}
 
 	// Update bottom panel statistics
-	m.bottomPanel = m.app.calculateBottomPanelStats()
+	m.refreshStats()
 
 	return nil
 }
@@ -46,12 +46,7 @@ func (m *Model) handleParCreateFinished(msg parCreateFinishedMsg) tea.Cmd {
 // handleParCreateError releases the source file and marks its index entry
 // as damaged
 func (m *Model) handleParCreateError(msg parCreateErrorMsg) tea.Cmd {
-	if msg.err != nil {
-		m.app.logger.Error("failed to create PAR2 file",
-			slog.String("dir", msg.dir),
-			slog.String("title", msg.title),
-			slog.String("error", msg.err.Error()))
-	}
+	clearCmd := m.reportError("PAR2 creation failed", msg.err)
 
 	title := msg.title
 	idx, item := findListItem(m.fileList.Items(), title, func(fi fileListItem) string { return fi.title })
@@ -72,7 +67,7 @@ func (m *Model) handleParCreateError(msg parCreateErrorMsg) tea.Cmd {
 	}
 
 	// Update bottom panel statistics
-	m.bottomPanel = m.app.calculateBottomPanelStats()
+	m.refreshStats()
 
-	return nil
+	return clearCmd
 }

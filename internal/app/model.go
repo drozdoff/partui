@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 )
@@ -68,6 +69,11 @@ type Model struct {
 	// indexListExpanded - when true, indexList shows all indexes from DB
 	indexListExpanded bool
 
+	// errText/errUntil hold the error reported by App.reportError; the
+	// line is shown in the bottom panel until errUntil
+	errText  string
+	errUntil time.Time
+
 	width  int
 	height int
 }
@@ -77,17 +83,19 @@ func NewModel(app *App) *Model {
 	return &Model{app: app}
 }
 
-// buildModelForDirectory rebuilds the model for the given directory
+// buildModelForDirectory rebuilds the model for the given directory. On
+// failure the model is left untouched, so navigation can simply report the
+// error and continue in the current directory.
 func (m *Model) buildModelForDirectory(dir string) error {
+	osFiles, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("read dir %s: %w", dir, err)
+	}
+
 	m.currentDir = dir
 
 	// Default focus on file list
 	m.focus = FocusFile
-
-	osFiles, err := os.ReadDir(dir)
-	if err != nil {
-		return err
-	}
 
 	items := make([]fileListItem, 0, len(osFiles)+1)
 	indexItems := m.processIndexFiles(osFiles)
@@ -154,7 +162,7 @@ func (m *Model) buildModelForDirectory(dir string) error {
 	m.indexList.DisableQuitKeybindings()
 
 	// Initialize bottom panel statistics
-	m.bottomPanel = m.app.calculateBottomPanelStats()
+	m.refreshStats()
 
 	m.applyLayout()
 
@@ -170,6 +178,20 @@ func isParIndex(filename string) bool {
 	// Detect volume files: name.vol<digits>+<digits>.par2
 	var volPattern = regexp.MustCompile(`\.vol\d+\+\d+\.par2$`)
 	return !volPattern.MatchString(lf)
+}
+
+// shortReason compresses a parsing error to what fits into a list item
+// description; the full reason is in the log
+func shortReason(err error) string {
+	msg := err.Error()
+	if i := strings.IndexByte(msg, '\n'); i >= 0 {
+		msg = msg[:i]
+	}
+	const maxLen = 60
+	if runes := []rune(msg); len(runes) > maxLen {
+		return string(runes[:maxLen]) + "…"
+	}
+	return msg
 }
 
 // isPar2Name reports whether the name can denote a PAR2 file at all. Only
@@ -190,10 +212,19 @@ func (m *Model) processIndexFiles(files []os.DirEntry) []list.Item {
 		if isParIndex(name) {
 			archived, err := par2.ListPar2Filenames(m.currentDir + "/" + name)
 			if err != nil {
+				// A .par2 file that cannot be parsed must not silently
+				// disappear from the index list: show it with an honest
+				// status. The full reason goes to the log.
 				m.app.logger.Warn("failed to list PAR2 filenames",
 					slog.String("dir", m.currentDir),
 					slog.String("filename", name),
 					slog.String("error", err.Error()))
+				indexItems = append(indexItems, indexListItem{
+					par2Filename: name,
+					dir:          m.currentDir,
+					status:       index.StatusUnverifiable,
+					desc:         "не удалось прочитать: " + shortReason(err),
+				})
 				continue
 			}
 			m.archived = append(m.archived, archived...)

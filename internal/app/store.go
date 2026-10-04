@@ -25,8 +25,6 @@ type IndexStore interface {
 	Delete(dir, filename string) error
 	All() ([]index.IndexDescriptor, error)
 	Old(threshold time.Time) ([]index.IndexDescriptor, error)
-	Damaged() ([]index.IndexDescriptor, error)
-	Count() (int, error)
 	Close() error
 }
 
@@ -67,14 +65,6 @@ func (s *bboltStore) All() ([]index.IndexDescriptor, error) {
 
 func (s *bboltStore) Old(threshold time.Time) ([]index.IndexDescriptor, error) {
 	return index.GetOldIndexes(s.db, threshold)
-}
-
-func (s *bboltStore) Damaged() ([]index.IndexDescriptor, error) {
-	return index.GetDamaged(s.db)
-}
-
-func (s *bboltStore) Count() (int, error) {
-	return index.CountAll(s.db)
 }
 
 func (s *bboltStore) Close() error {
@@ -144,14 +134,6 @@ func (s *noopStore) All() ([]index.IndexDescriptor, error) {
 
 func (s *noopStore) Old(threshold time.Time) ([]index.IndexDescriptor, error) {
 	return nil, s.unavailable()
-}
-
-func (s *noopStore) Damaged() ([]index.IndexDescriptor, error) {
-	return nil, s.unavailable()
-}
-
-func (s *noopStore) Count() (int, error) {
-	return 0, s.unavailable()
 }
 
 func (s *noopStore) Close() error {

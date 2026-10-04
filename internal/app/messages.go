@@ -23,3 +23,7 @@ type indexVerifyFinishedMsg struct {
 	size         uint64
 	err          error
 }
+
+// clearErrorMsg removes the error line shown by Model.reportError after
+// its display time is up
+type clearErrorMsg struct{}

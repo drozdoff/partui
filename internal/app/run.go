@@ -101,7 +101,7 @@ func run(logger *slog.Logger) error {
 				par2Filename: idx.Filename,
 			})
 		}
-		m.bottomPanel = app.calculateBottomPanelStats()
+		m.refreshStats()
 	}
 
 	if _, err := p.Run(); err != nil {
@@ -109,13 +109,4 @@ func run(logger *slog.Logger) error {
 	}
 
 	return nil
-}
-
-func printShowStopper(logger *slog.Logger, err error) {
-	if err != nil {
-		logger.Error("fatal error - shutting down",
-			slog.String("error", err.Error()))
-		fmt.Printf("Something went wrong: %v", err)
-		os.Exit(1)
-	}
 }

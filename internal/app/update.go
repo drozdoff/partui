@@ -26,6 +26,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleParCreateError(msg)
 	case indexVerifyFinishedMsg:
 		return m, m.handleVerifyFinished(msg)
+	case clearErrorMsg:
+		return m, m.handleClearErrorMsg()
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.fileList, cmd = m.fileList.Update(msg)

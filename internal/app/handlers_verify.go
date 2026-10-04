@@ -11,12 +11,7 @@ import (
 // entry and the bottom panel. A missing directory (StatusMissing) keeps the
 // old LastVerified — the index was not actually verified.
 func (m *Model) handleVerifyFinished(msg indexVerifyFinishedMsg) tea.Cmd {
-	if msg.err != nil {
-		m.app.logger.Error("failed to verify PAR2 file",
-			slog.String("dir", msg.dir),
-			slog.String("par2_file", msg.par2Filename),
-			slog.String("error", msg.err.Error()))
-	}
+	clearCmd := m.reportError("PAR2 verification failed", msg.err)
 
 	title := msg.par2Filename
 
@@ -50,7 +45,7 @@ func (m *Model) handleVerifyFinished(msg indexVerifyFinishedMsg) tea.Cmd {
 	}
 
 	// Update bottom panel statistics
-	m.bottomPanel = m.app.calculateBottomPanelStats()
+	m.refreshStats()
 
-	return nil
+	return clearCmd
 }

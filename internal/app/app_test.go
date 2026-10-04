@@ -3,8 +3,10 @@ package app
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"partui/internal/config"
+	"partui/internal/index"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -49,13 +51,35 @@ func TestApp_Shutdown_ClosesStore(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestApp_DegradedMode_BottomPanel(t *testing.T) {
-	app := newDegradedApp()
+func TestModel_DegradedMode_RefreshStats(t *testing.T) {
+	m := newTestModel()
+	m.app.store = newNoopStore(m.app.logger)
 
-	bp := app.calculateBottomPanelStats()
-	assert.ErrorIs(t, bp.storeErr, ErrStoreUnavailable)
-	assert.Equal(t, 0, bp.totalCount)
-	assert.Equal(t, 0, bp.processingCount)
+	m.refreshStats()
+	assert.ErrorIs(t, m.bottomPanel.storeErr, ErrStoreUnavailable)
+	assert.Equal(t, 0, m.bottomPanel.totalCount)
+	assert.Equal(t, 0, m.bottomPanel.processingCount)
+}
+
+// Item 3.2: the panel statistics are computed in a single All() pass
+func TestModel_RefreshStats_CountsStatuses(t *testing.T) {
+	m := newTestModel()
+	fixed := time.Unix(1700000000, 0)
+	st := newFakeStore()
+	require.NoError(t, st.Put("/d", "ok.par2", index.StatusOK, fixed))
+	require.NoError(t, st.Put("/d", "proc.par2", index.StatusProcessing, fixed))
+	require.NoError(t, st.Put("/d", "proc2.par2", index.StatusProcessing, fixed))
+	require.NoError(t, st.Put("/d", "bad.par2", index.StatusDamaged, fixed))
+	m.app.store = st
+
+	m.refreshStats()
+
+	assert.Equal(t, 4, m.bottomPanel.totalCount)
+	assert.Equal(t, 2, m.bottomPanel.processingCount)
+	require.Len(t, m.bottomPanel.damagedItems, 1)
+	assert.Equal(t, "bad.par2", m.bottomPanel.damagedItems[0].par2Filename)
+	assert.Equal(t, "/d", m.bottomPanel.damagedItems[0].dir)
+	assert.NoError(t, m.bottomPanel.storeErr)
 }
 
 func TestBottomPanelView_StoreUnavailable(t *testing.T) {

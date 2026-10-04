@@ -169,8 +169,11 @@ func (m *Model) openSelected() tea.Cmd {
 		prevDir = m.currentDir
 	}
 
-	err := m.buildModelForDirectory(newDir)
-	printShowStopper(m.app.logger, err)
+	// A failed navigation keeps the model in the current directory and is
+	// reported in the UI; only startup failures are fatal (plan item 4.1)
+	if err := m.buildModelForDirectory(newDir); err != nil {
+		return m.reportError("change directory", err)
+	}
 	// If going to parent, select the directory we came from
 	if prevDir != "" {
 		idx := findDirIndex(m.fileList.Items(), prevDir)
@@ -207,7 +210,7 @@ func (m *Model) verifySelected() tea.Cmd {
 	if err := m.app.store.UpdateStatus(item.dir, item.par2Filename, index.StatusProcessing); err != nil {
 		m.app.logger.Warn("failed to update index status in database", slog.String("error", err.Error()))
 	}
-	m.bottomPanel = m.app.calculateBottomPanelStats()
+	m.refreshStats()
 	m.app.wg.Add(1)
 	go m.app.verifyParFiles(item.dir, item)
 	return nil
@@ -222,8 +225,7 @@ func (m *Model) expandIndexList() tea.Cmd {
 
 	indexes, err := m.app.store.All()
 	if err != nil {
-		m.app.logger.Warn("failed to load all indexes", slog.String("error", err.Error()))
-		return nil
+		return m.reportError("load all indexes", err)
 	}
 
 	items := make([]list.Item, len(indexes))
@@ -252,10 +254,7 @@ func (m *Model) collapseIndexList() tea.Cmd {
 	m.indexListExpanded = false
 	osFiles, err := os.ReadDir(m.currentDir)
 	if err != nil {
-		m.app.logger.Warn("failed to read directory",
-			slog.String("dir", m.currentDir),
-			slog.String("error", err.Error()))
-		return nil
+		return m.reportError("read directory", err)
 	}
 	indexItems := m.processIndexFiles(osFiles)
 

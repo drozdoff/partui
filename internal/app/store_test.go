@@ -34,14 +34,6 @@ func TestNoopStore_AllMethodsUnavailable(t *testing.T) {
 	assert.Empty(t, old)
 	assert.ErrorIs(t, err, ErrStoreUnavailable)
 
-	damaged, err := st.Damaged()
-	assert.Empty(t, damaged)
-	assert.ErrorIs(t, err, ErrStoreUnavailable)
-
-	count, err := st.Count()
-	assert.Zero(t, count)
-	assert.ErrorIs(t, err, ErrStoreUnavailable)
-
 	err = st.Close()
 	assert.ErrorIs(t, err, ErrStoreUnavailable)
 }
@@ -76,15 +68,10 @@ func TestBboltStore_RoundTrip(t *testing.T) {
 	// UpdateStatus on a missing record is a no-op
 	require.NoError(t, st.UpdateStatus("/data", "missing.par2", index.StatusDamaged))
 
-	damaged, err := st.Damaged()
-	require.NoError(t, err)
-	require.Len(t, damaged, 1)
-	assert.Equal(t, "a.par2", damaged[0].Filename)
-	assert.Equal(t, "/data", damaged[0].Dir)
-
 	all, err := st.All()
 	require.NoError(t, err)
 	require.Len(t, all, 1)
+	assert.Equal(t, index.StatusDamaged, all[0].Status)
 
 	old, err := st.Old(verifiedAt.Add(-time.Minute))
 	require.NoError(t, err)
@@ -93,10 +80,6 @@ func TestBboltStore_RoundTrip(t *testing.T) {
 	old, err = st.Old(verifiedAt.Add(time.Minute))
 	require.NoError(t, err)
 	assert.Len(t, old, 1)
-
-	count, err := st.Count()
-	require.NoError(t, err)
-	assert.Equal(t, 1, count)
 
 	require.NoError(t, st.Close())
 
@@ -122,11 +105,6 @@ func TestBboltStore_Delete(t *testing.T) {
 	desc, err := st.Get("/data", "b.par2")
 	require.NoError(t, err)
 	assert.Nil(t, desc)
-
-	// the damaged bucket entry is removed together with the record
-	damaged, err := st.Damaged()
-	require.NoError(t, err)
-	assert.Empty(t, damaged)
 
 	all, err := st.All()
 	require.NoError(t, err)

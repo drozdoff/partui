@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"partui/internal/index"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -27,6 +28,40 @@ type BottomPanel struct {
 type DamagedIndex struct {
 	par2Filename string
 	dir          string
+}
+
+// refreshStats recomputes the bottom panel statistics in a single store
+// pass: the total, the processing count and the damaged list all come from
+// one All() query instead of the previous three queries (plan item 7.1).
+// A failed query (or degraded mode) is reported via BottomPanel.storeErr
+// instead of silently showing zeros.
+func (m *Model) refreshStats() {
+	all, err := m.app.store.All()
+	if err != nil {
+		m.app.logStoreError("failed to load indexes", err)
+		m.bottomPanel = BottomPanel{storeErr: err}
+		return
+	}
+
+	var damaged []DamagedIndex
+	processingCount := 0
+	for _, idx := range all {
+		switch idx.Status {
+		case index.StatusProcessing:
+			processingCount++
+		case index.StatusDamaged:
+			damaged = append(damaged, DamagedIndex{
+				par2Filename: idx.Filename,
+				dir:          idx.Dir,
+			})
+		}
+	}
+
+	m.bottomPanel = BottomPanel{
+		totalCount:      len(all),
+		processingCount: processingCount,
+		damagedItems:    damaged,
+	}
 }
 
 // handleWindowSize stores the new size and applies it to the lists
@@ -69,8 +104,7 @@ func (m *Model) View() string {
 
 	// Expanded mode - show full-screen index list
 	if m.indexListExpanded {
-		bottomPanel := m.bottomPanel.View(m.width)
-		return lipgloss.JoinVertical(lipgloss.Left, m.indexList.View(), bottomPanel)
+		return lipgloss.JoinVertical(lipgloss.Left, m.indexList.View(), m.renderBottomPanel())
 	}
 
 	// Apply focus styling to borders
@@ -83,9 +117,25 @@ func (m *Model) View() string {
 	lists := lipgloss.JoinHorizontal(lipgloss.Center, left, right)
 
 	// Add bottom panel
-	bottomPanel := m.bottomPanel.View(m.width)
+	return lipgloss.JoinVertical(lipgloss.Left, lists, m.renderBottomPanel())
+}
 
-	return lipgloss.JoinVertical(lipgloss.Left, lists, bottomPanel)
+// renderBottomPanel renders the statistics panel with an active error line
+// (reported via reportError) shown above it in red
+func (m *Model) renderBottomPanel() string {
+	panel := m.bottomPanel.View(m.width)
+
+	if m.errText != "" && m.app.now().Before(m.errUntil) {
+		errorLine := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#BB0000")).
+			Background(lipgloss.Color("#1a1a1a")).
+			Padding(0, 1).
+			Width(m.width).
+			Render(m.errText)
+		return lipgloss.JoinVertical(lipgloss.Left, errorLine, panel)
+	}
+
+	return panel
 }
 
 // View renders the bottom panel

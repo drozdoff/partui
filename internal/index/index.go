@@ -263,56 +263,7 @@ func All(db *bbolt.DB) ([]IndexDescriptor, error) {
 	return result, err
 }
 
-// CountAll returns total number of index files
-func CountAll(db *bbolt.DB) (int, error) {
-	count := 0
-	err := db.View(func(tx *bbolt.Tx) error {
-		indexes := tx.Bucket(bucketName(BucketIndexes))
-		count = indexes.Stats().KeyN
-		return nil
-	})
-	return count, err
-}
-
-// GetDamaged returns all damaged index descriptors
-func GetDamaged(db *bbolt.DB) ([]IndexDescriptor, error) {
-	var result []IndexDescriptor
-
-	err := db.View(func(tx *bbolt.Tx) error {
-		damaged := tx.Bucket(bucketName(BucketDamaged))
-
-		return damaged.ForEach(func(key, value []byte) error {
-			path := string(key)
-			// path = dir+filename, split at last slash
-			lastSlash := strings.LastIndex(path, "/")
-			dir := path[:lastSlash]
-			filename := path[lastSlash+1:]
-
-			result = append(result, IndexDescriptor{
-				Filename:     filename,
-				Dir:          dir,
-				Status:       StatusDamaged,
-				LastVerified: time.Now(),
-			})
-			return nil
-		})
-	})
-
-	return result, err
-}
-
-// CountDamaged returns count of damaged indexes
-func CountDamaged(db *bbolt.DB) (int, error) {
-	count := 0
-	err := db.View(func(tx *bbolt.Tx) error {
-		damaged := tx.Bucket(bucketName(BucketDamaged))
-		count = damaged.Stats().KeyN
-		return nil
-	})
-	return count, err
-}
-
-// Key format: [8 bytes ts][1 byte status][8 bytes size][dir/filename]
+// Key format: [8 bytes ts][1 byte status][dir/filename]
 func parsePrimaryKey(key []byte) IndexDescriptor {
 	ts := binary.BigEndian.Uint64(key[:8])
 	status := Status(key[8])

@@ -1,12 +1,17 @@
 package app
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"partui/internal/index"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type stubItem struct{}
@@ -104,4 +109,36 @@ func TestIsParIndex(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+// Item 3.2: a .par2 file that cannot be parsed must not silently disappear
+// from the index list — it is shown with the Unverifiable status.
+func TestBuildModelForDirectory_UnreadablePar2(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "broken.par2"), []byte("not a par2 file at all"), 0o644))
+
+	m := NewModel(newTestApp())
+	require.NoError(t, m.buildModelForDirectory(dir))
+
+	items := m.indexList.Items()
+	require.Len(t, items, 1)
+	it := items[0].(indexListItem)
+	assert.Equal(t, "broken.par2", it.par2Filename)
+	assert.Equal(t, index.StatusUnverifiable, it.status)
+	assert.Contains(t, it.desc, "не удалось прочитать")
+
+	// the file itself stays hidden from the file list as before
+	// (the only entry is the "../" parent directory)
+	require.Len(t, m.fileList.Items(), 1)
+	assert.Equal(t, "../", m.fileList.Items()[0].(fileListItem).title)
+}
+
+func TestShortReason(t *testing.T) {
+	assert.Equal(t, "boom", shortReason(errors.New("boom")))
+	assert.Equal(t, "first line", shortReason(errors.New("first line\nsecond line")))
+
+	long := strings.Repeat("а", 100)
+	got := shortReason(errors.New(long))
+	assert.Len(t, []rune(got), 61) // 60 runes + the ellipsis
+	assert.True(t, strings.HasSuffix(got, "…"))
 }

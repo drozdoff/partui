@@ -422,3 +422,48 @@ func TestUpdate_VerifyKey_CallsPar2Runner(t *testing.T) {
 	app.cancel()
 	app.wg.Wait()
 }
+
+// Item 3.2: an error reported via reportError is shown in the UI for
+// errorVisibleFor and then removed by the clearErrorMsg tick.
+func TestUpdate_ReportError_ShowsAndClears(t *testing.T) {
+	m := newTestModel()
+	fixed := time.Unix(1700000000, 0)
+	m.app.clock = func() time.Time { return fixed }
+
+	cmd := m.reportError("boom", errors.New("broken"))
+	require.NotNil(t, cmd, "a tick must be scheduled to clear the error")
+	assert.Equal(t, "boom: broken", m.errText)
+	assert.Equal(t, fixed.Add(errorVisibleFor), m.errUntil)
+	assert.Contains(t, m.View(), "boom: broken")
+
+	_ = m.handleClearErrorMsg()
+	assert.Empty(t, m.errText)
+	assert.True(t, m.errUntil.IsZero())
+	assert.NotContains(t, m.View(), "boom: broken")
+}
+
+// a nil error is not an error: nothing is shown and no tick is scheduled
+func TestModel_ReportError_NilError_Noop(t *testing.T) {
+	m := newTestModel()
+
+	assert.Nil(t, m.reportError("scope", nil))
+	assert.Empty(t, m.errText)
+}
+
+// A failed verification is surfaced to the user, not only to the log
+func TestUpdate_VerifyFinished_ErrorShown(t *testing.T) {
+	m := newTestModel()
+	fixed := time.Unix(1700000000, 0)
+	m.app.clock = func() time.Time { return fixed }
+	m.currentDir = "/tmp/x"
+
+	_, _ = m.Update(indexVerifyFinishedMsg{
+		dir:          "/tmp/x",
+		par2Filename: "a.txt.par2",
+		status:       index.StatusUnverifiable,
+		err:          errors.New("unexpected EOF"),
+	})
+
+	assert.Contains(t, m.errText, "PAR2 verification failed")
+	assert.Contains(t, m.errText, "unexpected EOF")
+}
