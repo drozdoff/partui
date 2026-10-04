@@ -64,6 +64,11 @@ func (bp BottomPanel) View(width int) string {
 		len(bp.damagedItems),
 	)
 
+	// Degraded mode: the index database is unavailable
+	if bp.storeErr != nil {
+		statsLine = "DB: недоступна | " + statsLine
+	}
+
 	// Build damaged files list (truncated if too long)
 	damagedLine := ""
 	if len(bp.damagedItems) > 0 {

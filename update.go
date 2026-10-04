@@ -1,15 +1,16 @@
 package main
 
-// Package-level variables used in Update method:
-// - wg: sync.WaitGroup - for tracking background goroutines (wg.Add(1))
-// - db: *bbolt.DB - database for index storage (index.PutIndex, calculateBottomPanelStats)
+// Dependencies used in the Update method live on the model's App (m.app):
+// - m.app.wg: sync.WaitGroup - for tracking background goroutines (wg.Add(1))
+// - m.app.db: *bbolt.DB - database for index storage (index.PutIndex, calculateBottomPanelStats)
+// - m.app.logger: *slog.Logger - structured logging
 //
 // Functions called:
-// - createParFiles() - creates PAR2 files in background
-// - verifyParFiles() - verifies PAR2 files in background
-// - buildModelForDirectory() - rebuilds model for directory navigation
+// - m.app.createParFiles() - creates PAR2 files in background
+// - m.app.verifyParFiles() - verifies PAR2 files in background
+// - m.buildModelForDirectory() - rebuilds model for directory navigation
 // - printShowStopper() - exits on fatal error
-// - calculateBottomPanelStats() - calculates bottom panel statistics
+// - m.app.calculateBottomPanelStats() - calculates bottom panel statistics
 // - index.PutIndex() - stores index in database
 
 import (
@@ -59,7 +60,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focus != FocusFile {
 				return m, nil
 			}
-			item := m.fileList.SelectedItem().(fileListItem)
+			item, ok := selectedFileItem(m)
+			if !ok {
+				return m, nil
+			}
 			if !item.isDir && !item.archive {
 				if item.selected {
 					m.filesSelected -= 1
@@ -81,40 +85,51 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// TODO: handle change dir during process. file list is now strictly for current dir.
 			if m.filesSelected > 0 {
 				for idx, i := range m.fileList.Items() {
-					item := i.(fileListItem)
+					item, ok := i.(fileListItem)
+					if !ok {
+						continue
+					}
 					if item.selected {
 						item.processing = true
 						item.selected = false
 						m.fileList.SetItem(idx, item)
 						addIndex(m, item.title+".par2")
-						wg.Add(1)
-						go createParFiles(m.currentDir, item.title, item.size)
+						m.app.wg.Add(1)
+						go m.app.createParFiles(m.currentDir, item.title, item.size)
 					}
 				}
 			} else {
-				item := m.fileList.SelectedItem().(fileListItem)
+				item, ok := selectedFileItem(m)
+				if !ok {
+					return m, nil
+				}
 				item.processing = true
 				m.fileList.SetItem(m.fileList.Index(), item)
 				m.fileList.CursorDown()
 				addIndex(m, item.title+".par2")
-				wg.Add(1)
-				go createParFiles(m.currentDir, item.title, item.size)
+				m.app.wg.Add(1)
+				go m.app.createParFiles(m.currentDir, item.title, item.size)
 			}
 		case "v":
 			// Only work in index list
 			if m.focus != FocusIndex {
 				return m, nil
 			}
-			item := m.indexList.SelectedItem().(indexListItem)
+			item, ok := selectedIndexChanged(m)
+			if !ok {
+				return m, nil
+			}
 			item.status = index.StatusProcessing
 			item.desc = formatIndexItemDesc(item, m.indexListExpanded)
 			m.indexList.SetItem(m.indexList.Index(), item)
 			m.indexList.CursorDown()
 
-			index.UpdateIndexStatus(db, item.dir, item.par2Filename, index.StatusProcessing)
-			m.bottomPanel = calculateBottomPanelStats(db)
-			wg.Add(1)
-			go verifyParFiles(item.dir, item)
+			if err := m.app.updateIndexStatusSafe(item.dir, item.par2Filename, index.StatusProcessing); err != nil {
+				m.app.logger.Warn("failed to update index status in database", slog.String("error", err.Error()))
+			}
+			m.bottomPanel = m.app.calculateBottomPanelStats()
+			m.app.wg.Add(1)
+			go m.app.verifyParFiles(item.dir, item)
 		case "i":
 			// Expand indexList to show all indexes from database
 			if m.indexListExpanded {
@@ -123,9 +138,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.indexListExpanded = true
 				m.focus = FocusIndex
-				indexes, err := index.All(db)
+				indexes, err := m.app.allIndexesSafe()
 				if err != nil {
-					logger.Warn("failed to load all indexes", slog.String("error", err.Error()))
+					m.app.logger.Warn("failed to load all indexes", slog.String("error", err.Error()))
 					return m, nil
 				}
 
@@ -152,10 +167,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.indexListExpanded = false
 				osFiles, err := os.ReadDir(m.currentDir)
 				if err != nil {
-					logger.Warn("failed to read directory", slog.String("dir", m.currentDir), slog.String("error", err.Error()))
+					m.app.logger.Warn("failed to read directory", slog.String("dir", m.currentDir), slog.String("error", err.Error()))
 					return m, nil
 				}
-				indexItems := processIndexFiles(m, osFiles)
+				indexItems := m.processIndexFiles(osFiles)
 
 				m.indexList = list.New(indexItems, newIndexListItemDelegate(m), 0, 0)
 				m.indexList.Title = "Index Files"
@@ -168,7 +183,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focus != FocusFile {
 				return m, nil
 			}
-			item := m.fileList.SelectedItem().(fileListItem)
+			item, ok := selectedFileItem(m)
+			if !ok {
+				return m, nil
+			}
 			if item.isDir {
 				var err error
 				dir := m.currentDir + "/" + item.title
@@ -180,12 +198,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					prevDir = m.currentDir
 				}
 
-				err = buildModelForDirectory(m, newDir)
-				printShowStopper(err)
+				err = m.buildModelForDirectory(newDir)
+				printShowStopper(m.app.logger, err)
 				// If going to parent, select the directory we came from
 				if prevDir != "" {
 					idx := findDirIndex(m.fileList.Items(), prevDir)
-					if idx > 0 {
+					if idx >= 0 {
 						m.fileList.Select(idx)
 					}
 				}
@@ -200,14 +218,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fileList.SetItem(iIdx, item)
 		}
 
-		// Update indexes database
-		index.PutIndex(db, msg.dir, msg.title, index.StatusOK, time.Now())
+		// Update indexes database. The record is about the .par2 file,
+		// not the source file: msg.title is the source file name
+		if err := m.app.putIndexSafe(msg.dir, msg.title+".par2", index.StatusOK, time.Now()); err != nil {
+			m.app.logger.Warn("failed to save index to database", slog.String("error", err.Error()))
+		}
 
 		// Update indexList - find the entry and mark it as completed
 		indexItems := m.indexList.Items()
-		iiIndex, _ := findListItem(indexItems, title+".par2", func(ii indexListItem) string { return ii.par2Filename })
+		iiIndex, ii := findListItem(indexItems, title+".par2", func(ii indexListItem) string { return ii.par2Filename })
 		if iiIndex != -1 {
-			ii := indexItems[iiIndex].(indexListItem)
 			ii.desc = formatIndexItemDesc(ii, m.indexListExpanded)
 			ii.status = index.StatusOK
 			ii.lastVerified = time.Now()
@@ -216,12 +236,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Update bottom panel statistics
-		m.bottomPanel = calculateBottomPanelStats(db)
+		m.bottomPanel = m.app.calculateBottomPanelStats()
 
 		return m, cmd
 	case parCreateErrorMsg:
 		if msg.err != nil {
-			logger.Error("failed to create PAR2 file", slog.String("dir", msg.dir), slog.String("title", msg.title), slog.String("error", msg.err.Error()))
+			m.app.logger.Error("failed to create PAR2 file", slog.String("dir", msg.dir), slog.String("title", msg.title), slog.String("error", msg.err.Error()))
 		}
 
 		title := msg.title
@@ -233,10 +253,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Update indexList - mark entry as damaged
 		indexItems := m.indexList.Items()
-		iiIndex, _ := findListItem(indexItems, title+".par2", func(ii indexListItem) string { return ii.par2Filename })
+		iiIndex, ii := findListItem(indexItems, title+".par2", func(ii indexListItem) string { return ii.par2Filename })
 		if iiIndex != -1 {
-			ii := indexItems[iiIndex].(indexListItem)
-			// index.PutIndex(db, msg.dir, ii.par2Filename, index.StatusDamaged, time.Now(), ii.size)
 			ii.desc = formatIndexItemDesc(ii, m.indexListExpanded)
 			ii.status = index.StatusDamaged
 			ii.lastVerified = time.Now()
@@ -245,25 +263,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Update bottom panel statistics
-		m.bottomPanel = calculateBottomPanelStats(db)
+		m.bottomPanel = m.app.calculateBottomPanelStats()
 
 	case indexVerifyFinishedMsg:
 		if msg.err != nil {
-			logger.Error("failed to verify PAR2 file", slog.String("dir", msg.dir), slog.String("par2_file", msg.par2Filename), slog.String("error", msg.err.Error()))
+			m.app.logger.Error("failed to verify PAR2 file", slog.String("dir", msg.dir), slog.String("par2_file", msg.par2Filename), slog.String("error", msg.err.Error()))
 		}
 
 		title := msg.par2Filename
 
 		// If directory is missing (StatusMissing), don't update LastVerified
 		if msg.status == index.StatusMissing {
-			err := index.UpdateIndexStatus(db, msg.dir, title, msg.status)
+			err := m.app.updateIndexStatusSafe(msg.dir, title, msg.status)
 			if err != nil {
-				logger.Warn("failed to update index status in database", slog.String("error", err.Error()))
+				m.app.logger.Warn("failed to update index status in database", slog.String("error", err.Error()))
 			}
 		} else {
-			err := index.PutIndex(db, msg.dir, title, msg.status, time.Now())
+			err := m.app.putIndexSafe(msg.dir, title, msg.status, time.Now())
 			if err != nil {
-				logger.Warn("failed to save index to database", slog.String("error", err.Error()))
+				m.app.logger.Warn("failed to save index to database", slog.String("error", err.Error()))
 			}
 		}
 
@@ -279,7 +297,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Update bottom panel statistics
-		m.bottomPanel = calculateBottomPanelStats(db)
+		m.bottomPanel = m.app.calculateBottomPanelStats()
 
 	case spinner.TickMsg:
 		m.fileList, cmd = m.fileList.Update(msg)
@@ -321,10 +339,14 @@ func findDirIndex(items []list.Item, dirName string) int {
 	// The entry title will be "dirname/"
 	targetTitle := filepath.Base(dirName) + "/"
 	for i, item := range items {
-		fi := item.(fileListItem)
+		fi, ok := item.(fileListItem)
+		if !ok {
+			continue
+		}
 		if fi.isDir && fi.title == targetTitle {
 			return i
 		}
 	}
-	return 0
+	// -1 also covers the first element correctly: the caller checks idx >= 0
+	return -1
 }

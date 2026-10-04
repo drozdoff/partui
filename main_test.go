@@ -5,8 +5,15 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/stretchr/testify/assert"
 )
+
+type stubItem struct{}
+
+func (stubItem) Title() string       { return "stub" }
+func (stubItem) Description() string { return "" }
+func (stubItem) FilterValue() string { return "stub" }
 
 func prepareDirecrory(t *testing.T) string {
 	t.Helper()
@@ -27,8 +34,8 @@ func prepareDirecrory(t *testing.T) string {
 
 func TestBuildModelForDirectory(t *testing.T) {
 	dir := prepareDirecrory(t)
-	m := Model{}
-	err := buildModelForDirectory(&m, dir)
+	m := NewModel(newTestApp())
+	err := m.buildModelForDirectory(dir)
 
 	assert.Nil(t, err)
 
@@ -55,8 +62,25 @@ func TestBuildModelForDirectory(t *testing.T) {
 		}
 	}
 
-	err = buildModelForDirectory(&m, filepath.Join(os.TempDir(), "non-existent-dir"))
+	err = m.buildModelForDirectory(filepath.Join(os.TempDir(), "non-existent-dir"))
 	assert.Error(t, err)
+}
+
+// Regression test for item 1.2: findDirIndex must return -1 when the entry
+// is missing and a valid index (including 0) when it is found.
+func TestFindDirIndex(t *testing.T) {
+	items := []list.Item{
+		fileListItem{title: "../", isDir: true},
+		fileListItem{title: "sub/", isDir: true},
+		fileListItem{title: "file.txt"},
+	}
+
+	assert.Equal(t, 1, findDirIndex(items, "/tmp/sub"))
+	// the first element must be findable, not reported as "not found"
+	assert.Equal(t, 0, findDirIndex(items, "/tmp/.."))
+
+	assert.Equal(t, -1, findDirIndex(items, "/tmp/missing"))
+	assert.Equal(t, -1, findDirIndex([]list.Item{stubItem{}}, "/tmp/stub"))
 }
 
 func TestIsParIndex(t *testing.T) {

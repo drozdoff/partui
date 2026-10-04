@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"log/slog"
@@ -10,17 +9,12 @@ import (
 	"partui/par2"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
-	gopar "github.com/akalin/gopar/par2"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
-	"go.etcd.io/bbolt"
 )
 
 type ListFocus string
@@ -65,6 +59,10 @@ type BottomPanel struct {
 	totalCount      int
 	processingCount int
 	damagedItems    []DamagedIndex
+
+	// storeErr is non-nil when index statistics are unavailable
+	// (degraded mode or a failed database query)
+	storeErr error
 }
 
 // DamagedIndex represents a damaged index file
@@ -74,6 +72,9 @@ type DamagedIndex struct {
 }
 
 type Model struct {
+	// app owns the shared dependencies: logger, db, waitgroup, program
+	app *App
+
 	fileList    list.Model
 	indexList   list.Model
 	bottomPanel BottomPanel
@@ -91,6 +92,11 @@ type Model struct {
 	height int
 }
 
+// NewModel creates a Model bound to the given App
+func NewModel(app *App) *Model {
+	return &Model{app: app}
+}
+
 // TODO: make percentage configurable
 const percentage = 5
 
@@ -99,20 +105,6 @@ const percentage = 5
 // const ReverifyThreshold = 30 * 24 * time.Hour
 const ReverifyThreshold = 5 * 24 * time.Hour
 
-var numProcs = runtime.GOMAXPROCS(-1)
-
-// package variables for package main
-var wg sync.WaitGroup
-var program *tea.Program
-var ctx context.Context
-var db *bbolt.DB
-
-// counting semaphore for any kind of workers
-var workers = make(chan struct{}, numProcs-1)
-
-// logger
-var logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
-
 // getLogPath returns the path to the log file
 func getLogPath() string {
 	home, _ := os.UserHomeDir()
@@ -120,7 +112,7 @@ func getLogPath() string {
 }
 
 // initLogger initializes structured logging to file
-func initLogger() {
+func initLogger() *slog.Logger {
 	logPath := getLogPath()
 
 	// Ensure directory exists
@@ -140,182 +132,11 @@ func initLogger() {
 		Level: slog.LevelInfo,
 	})
 
-	logger = slog.New(handler)
+	return slog.New(handler)
 }
 
-// calculateBottomPanelStats computes statistics for the bottom panel
-func calculateBottomPanelStats(db *bbolt.DB) BottomPanel {
-	if db == nil {
-		return BottomPanel{}
-	}
-
-	// Get total count
-	totalCount, err := index.CountAll(db)
-	if err != nil {
-		logger.Warn("failed to count indexes", slog.String("error", err.Error()))
-		return BottomPanel{}
-	}
-
-	// Get damaged items
-	damagedItems, err := index.GetDamaged(db)
-	if err != nil {
-		logger.Warn("failed to get damaged indexes", slog.String("error", err.Error()))
-		return BottomPanel{}
-	}
-
-	// Get all indexes to count processing ones
-	allIndexes, err := index.All(db)
-	if err != nil {
-		logger.Warn("failed to get all indexes", slog.String("error", err.Error()))
-		return BottomPanel{}
-	}
-
-	processingCount := 0
-	for _, idx := range allIndexes {
-		if idx.Status == index.StatusProcessing {
-			processingCount++
-		}
-	}
-
-	// Convert to DamagedIndex format
-	damaged := make([]DamagedIndex, len(damagedItems))
-	for i, d := range damagedItems {
-		damaged[i] = DamagedIndex{
-			par2Filename: d.Filename,
-			dir:          d.Dir,
-		}
-	}
-
-	return BottomPanel{
-		totalCount:      totalCount,
-		processingCount: processingCount,
-		damagedItems:    damaged,
-	}
-}
-
-func createParFiles(dir string, title string, size uint64) {
-	workers <- struct{}{}
-	defer func() {
-		<-workers
-		wg.Done()
-	}()
-
-	// don't start a new file if program exited
-	select {
-	case <-ctx.Done():
-		return
-	default:
-		// do nothing
-	}
-
-	logger.Debug("starting PAR2 creation",
-		slog.String("dir", dir),
-		slog.String("title", title),
-		slog.Uint64("size", size))
-
-	filePath := dir + "/" + title
-	parPath := filePath + ".par2"
-
-	options := gopar.CreateOptions{
-		SliceByteCount:  par2.CalculateBlockSize(size, percentage),
-		NumParityShards: -1,
-		NumGoroutines:   numProcs,
-		CreateDelegate:  gopar.DoNothingCreateDelegate{},
-	}
-
-	err := gopar.Create(parPath, []string{filePath}, options)
-	if err != nil {
-		logger.Error("PAR2 creation failed",
-			slog.String("dir", dir),
-			slog.String("title", title),
-			slog.String("par_path", parPath),
-			slog.String("error", err.Error()))
-		program.Send(parCreateErrorMsg{dir: dir, title: title, err: err})
-		return
-	}
-
-	logger.Info("PAR2 creation successful",
-		slog.String("dir", dir),
-		slog.String("title", title),
-		slog.String("par_path", parPath),
-		slog.Uint64("size", size))
-
-	program.Send(parCreateFinishedMsg{dir: dir, title: title, size: size})
-}
-
-func verifyParFiles(dir string, item indexListItem) {
-	workers <- struct{}{}
-	defer func() {
-		<-workers
-		wg.Done()
-	}()
-
-	// don't start a new file if program exited
-	select {
-	case <-ctx.Done():
-		return
-	default:
-		// do nothing
-	}
-
-	logger.Debug("starting PAR2 verification",
-		slog.String("dir", dir),
-		slog.String("par2_file", item.par2Filename))
-
-	// Check if directory exists before attempting verification
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		logger.Warn("directory not found, marking as missing",
-			slog.String("dir", dir),
-			slog.String("par2_file", item.par2Filename))
-
-		// Missing directory is a common case for offline/removable media and deserve a special status
-		msg := indexVerifyFinishedMsg{
-			dir:          dir,
-			par2Filename: item.par2Filename,
-			status:       index.StatusMissing,
-		}
-		program.Send(msg)
-		return
-	}
-
-	// TODO: propper logging
-	parPath := dir + "/" + item.par2Filename
-	options := gopar.VerifyOptions{
-		NumGoroutines:  numProcs,
-		VerifyDelegate: &par2.FilenameCollector{},
-	}
-	res, err := gopar.Verify(parPath, options)
-
-	msg := indexVerifyFinishedMsg{
-		dir:          dir,
-		par2Filename: item.par2Filename,
-		status:       index.StatusOK,
-	}
-
-	if err != nil {
-		logger.Error("PAR2 verification failed",
-			slog.String("dir", dir),
-			slog.String("par2_file", item.par2Filename),
-			slog.String("error", err.Error()),
-			slog.String("status", "unverifiable"))
-		msg.status = index.StatusUnverifiable
-		msg.err = err
-	} else if res.ShardCounts.RepairNeeded() {
-		logger.Warn("PAR2 file damaged",
-			slog.String("dir", dir),
-			slog.String("par2_file", item.par2Filename),
-			slog.Bool("repair_needed", true))
-		msg.status = index.StatusDamaged
-	} else {
-		logger.Debug("PAR2 verification successful",
-			slog.String("dir", dir),
-			slog.String("par2_file", item.par2Filename))
-	}
-
-	program.Send(msg)
-}
-
-func buildModelForDirectory(m *Model, dir string) error {
+// buildModelForDirectory rebuilds the model for the given directory
+func (m *Model) buildModelForDirectory(dir string) error {
 	m.currentDir = dir
 
 	// Default focus on file list
@@ -326,8 +147,8 @@ func buildModelForDirectory(m *Model, dir string) error {
 		return err
 	}
 
-	items := make([]list.Item, 0, len(osFiles)+1)
-	indexItems := processIndexFiles(m, osFiles)
+	items := make([]fileListItem, 0, len(osFiles)+1)
+	indexItems := m.processIndexFiles(osFiles)
 
 	// unless root directory, add .. to a list of directories
 	parent := filepath.Dir(dir)
@@ -359,17 +180,23 @@ func buildModelForDirectory(m *Model, dir string) error {
 	}
 
 	// Sorting: directories first, then files, by name
-	sort.Slice(items, func(i, j int) bool {
-		a := items[i].(fileListItem)
-		b := items[j].(fileListItem)
+	slices.SortFunc(items, func(a, b fileListItem) int {
 		// If types are different - directories first
 		if a.isDir != b.isDir {
-			return a.isDir
+			if a.isDir {
+				return -1
+			}
+			return 1
 		}
-		return a.title < b.title
+		return strings.Compare(a.title, b.title)
 	})
 
-	m.fileList = list.New(items, newFileListItemDelegate(m), 0, 0)
+	listItems := make([]list.Item, len(items))
+	for i, it := range items {
+		listItems[i] = it
+	}
+
+	m.fileList = list.New(listItems, newFileListItemDelegate(m), 0, 0)
 	m.fileList.Title = m.currentDir
 	m.fileList.SetShowHelp(false)
 	m.fileList.SetShowStatusBar(false)
@@ -385,7 +212,7 @@ func buildModelForDirectory(m *Model, dir string) error {
 	m.indexList.DisableQuitKeybindings()
 
 	// Initialize bottom panel statistics
-	m.bottomPanel = calculateBottomPanelStats(db)
+	m.bottomPanel = m.app.calculateBottomPanelStats()
 
 	return nil
 }
@@ -406,14 +233,14 @@ func hiddenFile(name string) bool {
 	return strings.HasPrefix(name, ".") || filepath.Ext(name) == ".par2"
 }
 
-func processIndexFiles(m *Model, files []os.DirEntry) []list.Item {
-	indexItems := make([]list.Item, 0)
+func (m *Model) processIndexFiles(files []os.DirEntry) []list.Item {
+	indexItems := make([]indexListItem, 0)
 	for _, file := range files {
 		name := file.Name()
 		if isParIndex(name) {
 			archived, err := par2.ListPar2Filenames(m.currentDir + "/" + name)
 			if err != nil {
-				logger.Warn("failed to list PAR2 filenames",
+				m.app.logger.Warn("failed to list PAR2 filenames",
 					slog.String("dir", m.currentDir),
 					slog.String("filename", name),
 					slog.String("error", err.Error()))
@@ -428,10 +255,10 @@ func processIndexFiles(m *Model, files []os.DirEntry) []list.Item {
 			}
 
 			// Save to database if available
-			if db != nil {
-				descriptor, err := index.GetIndex(db, m.currentDir, name)
+			if m.app.db != nil {
+				descriptor, err := index.GetIndex(m.app.db, m.currentDir, name)
 				if err != nil {
-					logger.Warn("failed to check index in database",
+					m.app.logger.Warn("failed to check index in database",
 						slog.String("dir", m.currentDir),
 						slog.String("filename", name),
 						slog.String("error", err.Error()))
@@ -440,9 +267,9 @@ func processIndexFiles(m *Model, files []os.DirEntry) []list.Item {
 					indexItem.lastVerified = descriptor.LastVerified
 				} else {
 					now := time.Now()
-					err = index.PutIndex(db, m.currentDir, name, index.StatusOK, now)
+					err = index.PutIndex(m.app.db, m.currentDir, name, index.StatusOK, now)
 					if err != nil {
-						logger.Warn("failed to save index to database",
+						m.app.logger.Warn("failed to save index to database",
 							slog.String("dir", m.currentDir),
 							slog.String("filename", name),
 							slog.String("error", err.Error()))
@@ -461,60 +288,79 @@ func processIndexFiles(m *Model, files []os.DirEntry) []list.Item {
 	}
 
 	// Sort: damaged first, then by lastVerified ascending
-	sort.Slice(indexItems, func(i, j int) bool {
-		a := indexItems[i].(indexListItem)
-		b := indexItems[j].(indexListItem)
-
+	slices.SortFunc(indexItems, func(a, b indexListItem) int {
 		// Damaged files first
-		if a.status == index.StatusDamaged && b.status != index.StatusDamaged {
-			return true
-		}
-		if b.status == index.StatusDamaged && a.status != index.StatusDamaged {
-			return false
+		aDamaged := a.status == index.StatusDamaged
+		bDamaged := b.status == index.StatusDamaged
+		if aDamaged != bDamaged {
+			if aDamaged {
+				return -1
+			}
+			return 1
 		}
 
 		// All others by lastVerified ascending (older first)
-		return a.lastVerified.Before(b.lastVerified)
+		return a.lastVerified.Compare(b.lastVerified)
 	})
 
-	return indexItems
+	items := make([]list.Item, len(indexItems))
+	for i, it := range indexItems {
+		items[i] = it
+	}
+	return items
 }
 
 func main() {
-	initLogger()
+	logger := initLogger()
+	if err := run(logger); err != nil {
+		logger.Error("fatal error", slog.String("error", err.Error()))
+		fmt.Printf("Something went wrong: %v", err)
+		os.Exit(1)
+	}
+}
+
+// run wires up the application, starts the UI and blocks until it finishes.
+// It is the only place allowed to terminate the app on error (via main).
+func run(logger *slog.Logger) error {
 	logger.Info("starting PartUI")
 
 	name, err := filepath.Abs(os.Args[0])
-	printShowStopper(err)
+	if err != nil {
+		return fmt.Errorf("resolve executable path: %w", err)
+	}
 
-	// Initialize the index database
-	db, err = index.OpenDB(index.GetDBPath())
-	defer index.CloseDB(db)
+	app := NewApp(logger)
+	// Shutdown cancels the context, waits for goroutines and closes the db
+	// — strictly in that order
+	defer app.Shutdown()
 
+	// Initialize the index database; on failure the app keeps running in
+	// degraded mode without the index memory
+	db, err := index.OpenDB(index.GetDBPath())
 	if err != nil {
 		logger.Error("failed to open index database",
 			slog.String("db_path", index.GetDBPath()),
 			slog.String("error", err.Error()))
-		db = nil
 	} else {
 		logger.Debug("index database opened",
 			slog.String("db_path", index.GetDBPath()))
+		app.db = db
 	}
 
-	m := Model{}
+	m := NewModel(app)
 
-	err = buildModelForDirectory(&m, filepath.Dir(name))
-	printShowStopper(err)
+	if err := m.buildModelForDirectory(filepath.Dir(name)); err != nil {
+		return fmt.Errorf("build model for start dir %s: %w", filepath.Dir(name), err)
+	}
 
-	var cancel context.CancelFunc
-	ctx, cancel = context.WithCancel(context.Background())
-	program = tea.NewProgram(&m, tea.WithAltScreen(), tea.WithContext(ctx))
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(app.ctx))
+	app.program = p
 
 	// Reverify old indexes BEFORE starting the UI
 	// This runs in the main thread as required
-	if db != nil {
+	if app.db != nil {
 		threshold := time.Now().Add(-ReverifyThreshold)
-		oldIndexes, err := index.GetOldIndexes(db, threshold)
+		oldIndexes, err := index.GetOldIndexes(app.db, threshold)
 		if err != nil {
 			logger.Warn("failed to get old indexes",
 				slog.String("error", err.Error()))
@@ -526,27 +372,26 @@ func main() {
 			// Start verify workers for old indexes
 			for _, idx := range oldIndexes {
 				// set old indexes status to processing
-				index.UpdateIndexStatus(db, idx.Dir, idx.Filename, index.StatusProcessing)
+				index.UpdateIndexStatus(app.db, idx.Dir, idx.Filename, index.StatusProcessing)
 
 				// start verify goroutine
-				wg.Add(1)
-				go verifyParFiles(idx.Dir, indexListItem{
+				app.wg.Add(1)
+				go app.verifyParFiles(idx.Dir, indexListItem{
 					par2Filename: idx.Filename,
 				})
 			}
-			m.bottomPanel = calculateBottomPanelStats(db)
+			m.bottomPanel = app.calculateBottomPanelStats()
 		}
 	}
 
-	_, err = program.Run()
-	cancel()
-	wg.Wait()
+	if _, err := p.Run(); err != nil {
+		return fmt.Errorf("run UI: %w", err)
+	}
 
-	logger.Info("PartUI shutting down")
-	printShowStopper(err)
+	return nil
 }
 
-func printShowStopper(err error) {
+func printShowStopper(logger *slog.Logger, err error) {
 	if err != nil {
 		logger.Error("fatal error - shutting down",
 			slog.String("error", err.Error()))
