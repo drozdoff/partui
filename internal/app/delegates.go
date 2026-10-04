@@ -17,7 +17,6 @@ type fileListItemDelegate struct {
 	ticked     lipgloss.Style
 	archive    lipgloss.Style
 	selected   lipgloss.Style
-	damaged    lipgloss.Style
 	processing lipgloss.Style
 }
 
@@ -29,7 +28,6 @@ func newFileListItemDelegate(parent *Model) fileListItemDelegate {
 		ticked:     lipgloss.NewStyle().PaddingLeft(1).PaddingRight(2).Foreground(lipgloss.Color("#BBAA00")),
 		archive:    common.Foreground(lipgloss.Color("#00BB00")),
 		selected:   common.Background(lipgloss.Color("#0044FF")).Foreground(lipgloss.Color("#FFFFFF")),
-		damaged:    common.Foreground(lipgloss.Color("#BB0000")),
 		processing: common.Foreground(lipgloss.Color("#FFFF00")),
 	}
 }
@@ -57,11 +55,11 @@ func (d fileListItemDelegate) Render(w io.Writer, m list.Model, index int, item 
 		title = string(titleRunes[:availableWidth-1]) + "~"
 	}
 
-	spacer_len := m.Width() - utf8.RuneCountInString(title) - descLen
-	if spacer_len <= 0 {
-		spacer_len = 1
+	spacerLen := m.Width() - utf8.RuneCountInString(title) - descLen
+	if spacerLen <= 0 {
+		spacerLen = 1
 	}
-	spacer := strings.Repeat(" ", spacer_len)
+	spacer := strings.Repeat(" ", spacerLen)
 	content := title + spacer + it.desc
 
 	if index == m.Index() && d.parent.focus == FocusFile {
@@ -83,8 +81,6 @@ func (d fileListItemDelegate) Render(w io.Writer, m list.Model, index int, item 
 		style = d.processing
 	case it.archive:
 		style = d.archive
-	case it.damaged:
-		style = d.damaged
 	default:
 		style = d.normal
 	}
@@ -113,21 +109,6 @@ func newIndexListItemDelegate(parent *Model) indexListItemDelegate {
 	}
 }
 
-// GetStatusStyle returns the appropriate style for a given status
-func GetStatusStyle(status index.Status) lipgloss.Style {
-	common := lipgloss.NewStyle().PaddingLeft(3).PaddingRight(2)
-	switch status {
-	case index.StatusProcessing:
-		return common.Foreground(lipgloss.Color("#FFFF00"))
-	case index.StatusOK:
-		return common.Foreground(lipgloss.Color("#00BB00"))
-	case index.StatusDamaged:
-		return common.Foreground(lipgloss.Color("#BB0000"))
-	default:
-		return common
-	}
-}
-
 func (d indexListItemDelegate) Height() int                               { return 2 }
 func (d indexListItemDelegate) Spacing() int                              { return 1 }
 func (d indexListItemDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
@@ -140,11 +121,11 @@ func (d indexListItemDelegate) Render(w io.Writer, m list.Model, idx int, item l
 		return
 	}
 
-	spacer_len := m.Width() - utf8.RuneCountInString(it.par2Filename)
-	if spacer_len <= 0 {
-		spacer_len = 1
+	spacerLen := m.Width() - utf8.RuneCountInString(it.par2Filename)
+	if spacerLen <= 0 {
+		spacerLen = 1
 	}
-	spacer := strings.Repeat(" ", spacer_len)
+	spacer := strings.Repeat(" ", spacerLen)
 
 	content := it.par2Filename + spacer + "\n" + it.desc
 

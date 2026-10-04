@@ -14,7 +14,6 @@ type fileListItem struct {
 	processing bool
 	archive    bool
 	selected   bool
-	damaged    bool
 }
 
 func (i fileListItem) Title() string       { return i.title }

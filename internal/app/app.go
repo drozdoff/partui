@@ -181,7 +181,7 @@ func (a *App) verifyParFiles(dir string, item indexListItem) {
 		NumGoroutines:  runtime.GOMAXPROCS(0),
 		VerifyDelegate: &par2.FilenameCollector{},
 	}
-	res, err := a.par2.Verify(parPath, options)
+	verifyRes, err := a.par2.Verify(parPath, options)
 
 	msg := indexVerifyFinishedMsg{
 		dir:          dir,
@@ -197,7 +197,7 @@ func (a *App) verifyParFiles(dir string, item indexListItem) {
 			slog.String("status", "unverifiable"))
 		msg.status = index.StatusUnverifiable
 		msg.err = err
-	} else if res.ShardCounts.RepairNeeded() {
+	} else if verifyRes.ShardCounts.RepairNeeded() {
 		a.logger.Warn("PAR2 file damaged",
 			slog.String("dir", dir),
 			slog.String("par2_file", item.par2Filename),

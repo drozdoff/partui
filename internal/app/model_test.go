@@ -20,7 +20,7 @@ func (stubItem) Title() string       { return "stub" }
 func (stubItem) Description() string { return "" }
 func (stubItem) FilterValue() string { return "stub" }
 
-func prepareDirecrory(t *testing.T) string {
+func prepareDirectory(t *testing.T) string {
 	t.Helper()
 	tempDir := t.TempDir()
 
@@ -38,7 +38,7 @@ func prepareDirecrory(t *testing.T) string {
 }
 
 func TestBuildModelForDirectory(t *testing.T) {
-	dir := prepareDirecrory(t)
+	dir := prepareDirectory(t)
 	m := NewModel(newTestApp())
 	err := m.buildModelForDirectory(dir)
 
