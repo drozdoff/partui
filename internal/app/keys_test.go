@@ -136,6 +136,20 @@ func TestKeys_Table(t *testing.T) {
 			},
 		},
 		{
+			name: "c on a directory does nothing",
+			setup: func(t *testing.T, m *Model) {
+				m.app.cancel()
+				m.currentDir = "/tmp/x"
+				m.fileList.SetItems([]list.Item{fileListItem{title: "sub/", isDir: true}})
+			},
+			key: "c",
+			check: func(t *testing.T, m *Model) {
+				it := m.fileList.Items()[0].(fileListItem)
+				assert.False(t, it.processing)
+				assert.Empty(t, m.indexList.Items())
+			},
+		},
+		{
 			name: "v moves the index to processing and writes the status",
 			setup: func(t *testing.T, m *Model) {
 				m.app.cancel()

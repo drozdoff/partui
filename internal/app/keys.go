@@ -135,6 +135,10 @@ func (m *Model) createSelected() tea.Cmd {
 		if !ok {
 			return nil
 		}
+		// directories cannot be archived
+		if item.isDir {
+			return nil
+		}
 		item.processing = true
 		m.fileList.SetItem(m.fileList.Index(), item)
 		m.fileList.CursorDown()
