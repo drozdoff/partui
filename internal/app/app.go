@@ -56,6 +56,9 @@ func NewApp(logger *slog.Logger) *App {
 	}
 }
 
+// TODO: make percentage configurable
+const percentage = 5
+
 // Shutdown cancels the app context, waits for background goroutines and only
 // then closes the index database — strictly in that order, so no goroutine
 // can write into a closed database.

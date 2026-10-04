@@ -12,6 +12,23 @@ func (m *Model) Init() tea.Cmd {
 	return tea.SetWindowTitle("Partui")
 }
 
+// BottomPanel displays index statistics at the bottom of the UI
+type BottomPanel struct {
+	totalCount      int
+	processingCount int
+	damagedItems    []DamagedIndex
+
+	// storeErr is non-nil when index statistics are unavailable
+	// (degraded mode or a failed database query)
+	storeErr error
+}
+
+// DamagedIndex represents a damaged index file
+type DamagedIndex struct {
+	par2Filename string
+	dir          string
+}
+
 func (m *Model) View() string {
 	style := lipgloss.NewStyle()
 

@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"log"
 	"log/slog"
 	"os"
 	"partui/internal/index"
@@ -14,7 +13,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 type ListFocus string
@@ -54,25 +52,8 @@ func formatIndexItemDesc(item indexListItem, expanded bool) string {
 	return item.dir + " | " + status
 }
 
-// BottomPanel displays index statistics at the bottom of the UI
-type BottomPanel struct {
-	totalCount      int
-	processingCount int
-	damagedItems    []DamagedIndex
-
-	// storeErr is non-nil when index statistics are unavailable
-	// (degraded mode or a failed database query)
-	storeErr error
-}
-
-// DamagedIndex represents a damaged index file
-type DamagedIndex struct {
-	par2Filename string
-	dir          string
-}
-
 type Model struct {
-	// app owns the shared dependencies: logger, db, waitgroup, program
+	// app owns the shared dependencies: logger, store, waitgroup, program
 	app *App
 
 	fileList    list.Model
@@ -95,44 +76,6 @@ type Model struct {
 // NewModel creates a Model bound to the given App
 func NewModel(app *App) *Model {
 	return &Model{app: app}
-}
-
-// TODO: make percentage configurable
-const percentage = 5
-
-// ReverifyThreshold defines how old an index must be to require re-verification on startup
-// Default: 30 days (can be changed here or made configurable)
-// const ReverifyThreshold = 30 * 24 * time.Hour
-const ReverifyThreshold = 5 * 24 * time.Hour
-
-// getLogPath returns the path to the log file
-func getLogPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".partui", "partui.log")
-}
-
-// initLogger initializes structured logging to file
-func initLogger() *slog.Logger {
-	logPath := getLogPath()
-
-	// Ensure directory exists
-	dir := filepath.Dir(logPath)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		log.Fatalf("failed to create log directory: %v", err)
-	}
-
-	// Open log file
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Fatalf("failed to open log file: %v", err)
-	}
-
-	// Create JSON handler with INFO level
-	handler := slog.NewJSONHandler(f, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	})
-
-	return slog.New(handler)
 }
 
 // buildModelForDirectory rebuilds the model for the given directory
@@ -308,98 +251,4 @@ func (m *Model) processIndexFiles(files []os.DirEntry) []list.Item {
 		items[i] = it
 	}
 	return items
-}
-
-// Run initializes logging and runs the application. It reports an error only
-// for fatal startup problems; the error is logged here as well, the caller
-// (cmd/partui) just turns it into a non-zero exit code.
-func Run() error {
-	logger := initLogger()
-	if err := run(logger); err != nil {
-		logger.Error("fatal error", slog.String("error", err.Error()))
-		fmt.Printf("Something went wrong: %v", err)
-		return err
-	}
-	return nil
-}
-
-// run wires up the application, starts the UI and blocks until it finishes.
-// It is the only place allowed to terminate the app on error (via main).
-func run(logger *slog.Logger) error {
-	logger.Info("starting PartUI")
-
-	name, err := filepath.Abs(os.Args[0])
-	if err != nil {
-		return fmt.Errorf("resolve executable path: %w", err)
-	}
-
-	app := NewApp(logger)
-	// Shutdown cancels the context, waits for goroutines and closes the db
-	// — strictly in that order
-	defer app.Shutdown()
-
-	// Initialize the index database; on failure the app keeps running in
-	// degraded mode without the index memory
-	db, err := index.OpenDB(index.GetDBPath())
-	if err != nil {
-		logger.Error("failed to open index database",
-			slog.String("db_path", index.GetDBPath()),
-			slog.String("error", err.Error()))
-	} else {
-		logger.Debug("index database opened",
-			slog.String("db_path", index.GetDBPath()))
-		app.db = db
-	}
-
-	m := NewModel(app)
-
-	if err := m.buildModelForDirectory(filepath.Dir(name)); err != nil {
-		return fmt.Errorf("build model for start dir %s: %w", filepath.Dir(name), err)
-	}
-
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(app.ctx))
-	app.program = p
-
-	// Reverify old indexes BEFORE starting the UI
-	// This runs in the main thread as required
-	if app.db != nil {
-		threshold := time.Now().Add(-ReverifyThreshold)
-		oldIndexes, err := index.GetOldIndexes(app.db, threshold)
-		if err != nil {
-			logger.Warn("failed to get old indexes",
-				slog.String("error", err.Error()))
-		} else if len(oldIndexes) > 0 {
-			logger.Info("found indexes requiring re-verification",
-				slog.Int("count", len(oldIndexes)),
-				slog.Duration("threshold", ReverifyThreshold))
-
-			// Start verify workers for old indexes
-			for _, idx := range oldIndexes {
-				// set old indexes status to processing
-				index.UpdateIndexStatus(app.db, idx.Dir, idx.Filename, index.StatusProcessing)
-
-				// start verify goroutine
-				app.wg.Add(1)
-				go app.verifyParFiles(idx.Dir, indexListItem{
-					par2Filename: idx.Filename,
-				})
-			}
-			m.bottomPanel = app.calculateBottomPanelStats()
-		}
-	}
-
-	if _, err := p.Run(); err != nil {
-		return fmt.Errorf("run UI: %w", err)
-	}
-
-	return nil
-}
-
-func printShowStopper(logger *slog.Logger, err error) {
-	if err != nil {
-		logger.Error("fatal error - shutting down",
-			slog.String("error", err.Error()))
-		fmt.Printf("Something went wrong: %v", err)
-		os.Exit(1)
-	}
 }
