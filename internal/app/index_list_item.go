@@ -1,8 +1,8 @@
-package main
+package app
 
 import (
 	"io"
-	"partui/index"
+	"partui/internal/index"
 	"strings"
 	"time"
 	"unicode/utf8"

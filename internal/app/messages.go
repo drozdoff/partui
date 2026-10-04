@@ -1,6 +1,6 @@
-package main
+package app
 
-import "partui/index"
+import "partui/internal/index"
 
 // Custom messages to be sent to main process
 

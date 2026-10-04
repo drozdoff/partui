@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"io"
@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/bbolt"
 
-	"partui/index"
+	"partui/internal/index"
 )
 
 // newTestApp returns an App with a discard logger and a nil db,

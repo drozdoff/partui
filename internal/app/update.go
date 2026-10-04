@@ -1,4 +1,4 @@
-package main
+package app
 
 // Dependencies used in the Update method live on the model's App (m.app):
 // - m.app.wg: sync.WaitGroup - for tracking background goroutines (wg.Add(1))
@@ -16,7 +16,7 @@ package main
 import (
 	"log/slog"
 	"os"
-	"partui/index"
+	"partui/internal/index"
 	"path/filepath"
 	"time"
 

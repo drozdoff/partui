@@ -1,11 +1,11 @@
-package main
+package app
 
 import (
 	"errors"
 	"path/filepath"
 	"testing"
 
-	"partui/index"
+	"partui/internal/index"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"

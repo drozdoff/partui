@@ -1,4 +1,4 @@
-package main
+package app
 
 // selectedFileItem returns the selected item of the file list and reports
 // whether an item is actually selected. It returns false when the list is

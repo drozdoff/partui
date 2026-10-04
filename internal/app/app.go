@@ -1,12 +1,12 @@
-package main
+package app
 
 import (
 	"context"
 	"errors"
 	"log/slog"
 	"os"
-	"partui/index"
-	"partui/par2"
+	"partui/internal/index"
+	"partui/internal/par2"
 	"runtime"
 	"sync"
 	"time"

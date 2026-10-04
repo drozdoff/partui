@@ -1,12 +1,12 @@
-package main
+package app
 
 import (
 	"fmt"
 	"log"
 	"log/slog"
 	"os"
-	"partui/index"
-	"partui/par2"
+	"partui/internal/index"
+	"partui/internal/par2"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -310,13 +310,17 @@ func (m *Model) processIndexFiles(files []os.DirEntry) []list.Item {
 	return items
 }
 
-func main() {
+// Run initializes logging and runs the application. It reports an error only
+// for fatal startup problems; the error is logged here as well, the caller
+// (cmd/partui) just turns it into a non-zero exit code.
+func Run() error {
 	logger := initLogger()
 	if err := run(logger); err != nil {
 		logger.Error("fatal error", slog.String("error", err.Error()))
 		fmt.Printf("Something went wrong: %v", err)
-		os.Exit(1)
+		return err
 	}
+	return nil
 }
 
 // run wires up the application, starts the UI and blocks until it finishes.
