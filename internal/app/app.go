@@ -10,10 +10,10 @@ import (
 	"partui/internal/par2"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"time"
 
-	gopar "github.com/akalin/gopar/par2"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -48,15 +48,15 @@ type App struct {
 }
 
 // NewApp creates an App with the given configuration: a degraded (noop)
-// store — run() replaces it with a real bbolt store on success — the real
-// gopar runner and the wall clock.
+// store — run() replaces it with a real bbolt store on success — the
+// production PAR2 runner and the wall clock.
 func NewApp(cfg config.Config, logger *slog.Logger) *App {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &App{
 		cfg:       cfg,
 		logger:    logger,
 		store:     newNoopStore(logger),
-		par2:      goparRunner{},
+		par2:      defaultRunner{},
 		clock:     time.Now,
 		ctx:       ctx,
 		cancel:    cancel,
@@ -134,14 +134,17 @@ func (a *App) createParFiles(dir string, title string, size uint64) {
 		slog.String("title", title),
 		slog.Uint64("size", size))
 
+	// gopar-period hygiene: hand the freed heap back to the OS right after
+	// the task, so parallel large-file tasks do not stack their RSS peaks
+	defer debug.FreeOSMemory()
+
 	filePath := filepath.Join(dir, title)
 	parPath := filePath + ".par2"
 
-	options := gopar.CreateOptions{
+	options := par2.CreateOptions{
 		SliceByteCount:  par2.CalculateBlockSize(size, uint64(a.cfg.Percentage)),
 		NumParityShards: -1,
 		NumGoroutines:   runtime.GOMAXPROCS(0),
-		CreateDelegate:  gopar.DoNothingCreateDelegate{},
 	}
 
 	err := a.par2.Create(parPath, []string{filePath}, options)
@@ -165,13 +168,20 @@ func (a *App) createParFiles(dir string, title string, size uint64) {
 }
 
 // verifyParFiles verifies a single PAR2 file in a worker goroutine and
-// always reports the outcome as indexVerifyFinishedMsg — OK, Damaged,
+// reports the outcome as indexVerifyFinishedMsg — OK, Damaged,
 // Unverifiable or Missing — so an index set to processing by verifySelected
-// always reaches a final status (plan item 4.1).
+// always reaches a final status (plan item 4.1). The exceptions are a
+// shutdown while the task is queued and a cancelled context: in both cases
+// the shutdown is not an honest verification result, so no message is sent
+// and the index keeps its processing status (plans/streaming_file.md §5.4).
 func (a *App) verifyParFiles(dir string, item indexListItem) {
 	a.logger.Debug("starting PAR2 verification",
 		slog.String("dir", dir),
 		slog.String("par2_file", item.par2Filename))
+
+	// The streaming verify itself is frugal, but hand the freed heap back
+	// to the OS right after the task anyway (gopar-period hygiene).
+	defer debug.FreeOSMemory()
 
 	// Check if directory exists before attempting verification
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -189,13 +199,21 @@ func (a *App) verifyParFiles(dir string, item indexListItem) {
 		return
 	}
 
-	// TODO: propper logging
 	parPath := filepath.Join(dir, item.par2Filename)
-	options := gopar.VerifyOptions{
-		NumGoroutines:  runtime.GOMAXPROCS(0),
-		VerifyDelegate: &par2.FilenameCollector{},
+	options := par2.VerifyOptions{
+		Delegate: verifyProgressLog{logger: a.logger, par2File: item.par2Filename},
 	}
-	verifyRes, err := a.par2.Verify(parPath, options)
+	verifyRes, err := a.par2.Verify(a.ctx, parPath, options)
+
+	// A cancellation means the app is shutting down: reporting the set as
+	// Unverifiable would be a lie, so the task exits silently, symmetric
+	// with the queued-task case of launch().
+	if errors.Is(err, context.Canceled) {
+		a.logger.Info("PAR2 verification cancelled",
+			slog.String("dir", dir),
+			slog.String("par2_file", item.par2Filename))
+		return
+	}
 
 	msg := indexVerifyFinishedMsg{
 		dir:          dir,
@@ -211,7 +229,7 @@ func (a *App) verifyParFiles(dir string, item indexListItem) {
 			slog.String("status", "unverifiable"))
 		msg.status = index.StatusUnverifiable
 		msg.err = err
-	} else if verifyRes.ShardCounts.RepairNeeded() {
+	} else if verifyRes.RepairNeeded {
 		a.logger.Warn("PAR2 file damaged",
 			slog.String("dir", dir),
 			slog.String("par2_file", item.par2Filename),

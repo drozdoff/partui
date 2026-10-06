@@ -1,14 +1,14 @@
 package app
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"sync"
 	"time"
 
 	"partui/internal/index"
-
-	gopar "github.com/akalin/gopar/par2"
+	"partui/internal/par2"
 )
 
 func discardLogger() *slog.Logger {
@@ -116,12 +116,15 @@ func (s *fakeStore) Delete(dir, filename string) error {
 func (s *fakeStore) Close() error { return nil }
 
 // fakePar2 records Par2Runner calls; results can be injected per test.
-// The channels let tests wait for a call instead of polling.
+// The channels let tests wait for a call instead of polling. verifyFunc,
+// when set, replaces the canned response entirely — used to simulate a
+// long verification that observes ctx cancellation.
 type fakePar2 struct {
 	mu         sync.Mutex
 	createErr  error
-	verifyRes  gopar.VerifyResult
+	verifyRes  par2.VerifyResult
 	verifyErr  error
+	verifyFunc func(ctx context.Context, parPath string) (par2.VerifyResult, error)
 	created    []string // par paths passed to Create
 	verified   []string // par paths passed to Verify
 	createdCh  chan string
@@ -135,7 +138,7 @@ func newFakePar2() *fakePar2 {
 	}
 }
 
-func (f *fakePar2) Create(parPath string, files []string, opts gopar.CreateOptions) error {
+func (f *fakePar2) Create(parPath string, files []string, opts par2.CreateOptions) error {
 	f.mu.Lock()
 	f.created = append(f.created, parPath)
 	f.mu.Unlock()
@@ -143,10 +146,13 @@ func (f *fakePar2) Create(parPath string, files []string, opts gopar.CreateOptio
 	return f.createErr
 }
 
-func (f *fakePar2) Verify(parPath string, opts gopar.VerifyOptions) (gopar.VerifyResult, error) {
+func (f *fakePar2) Verify(ctx context.Context, parPath string, opts par2.VerifyOptions) (par2.VerifyResult, error) {
 	f.mu.Lock()
 	f.verified = append(f.verified, parPath)
 	f.mu.Unlock()
 	f.verifiedCh <- parPath
+	if f.verifyFunc != nil {
+		return f.verifyFunc(ctx, parPath)
+	}
 	return f.verifyRes, f.verifyErr
 }

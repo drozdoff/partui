@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -167,4 +168,44 @@ func TestIntegration_VerifyMissingDir(t *testing.T) {
 	assert.Equal(t, index.StatusMissing, desc.Status)
 	assert.WithinDuration(t, old, desc.LastVerified, time.Second,
 		"a missing-directory check must not touch LastVerified")
+}
+
+// A cancellation in the middle of a verification must not flip the index to
+// Unverifiable: the worker exits silently — symmetric with a shutdown while
+// the task is queued — and the status stays processing
+// (plans/streaming_file.md §5.4.3).
+func TestIntegration_VerifyCancelled(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
+
+	tmp := t.TempDir()
+	app, stop := newIntegrationApp(t, tmp)
+
+	require.NoError(t, app.store.Put(tmp, "a.par2", index.StatusProcessing, app.now()))
+
+	// a runner whose verify blocks until its context is cancelled — the
+	// deterministic stand-in for "cancelled mid-file"
+	fp := newFakePar2()
+	fp.verifyFunc = func(ctx context.Context, parPath string) (par2.VerifyResult, error) {
+		<-ctx.Done()
+		return par2.VerifyResult{}, ctx.Err()
+	}
+	app.par2 = fp
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		app.verifyParFiles(tmp, indexListItem{par2Filename: "a.par2", dir: tmp})
+	}()
+	app.cancel()
+	<-done
+
+	stop()
+
+	desc, err := app.store.Get(tmp, "a.par2")
+	require.NoError(t, err)
+	require.NotNil(t, desc)
+	assert.Equal(t, index.StatusProcessing, desc.Status,
+		"a cancelled verification must not write a status")
 }

@@ -10,8 +10,6 @@ import (
 
 	"partui/internal/index"
 	"partui/internal/par2"
-
-	gopar "github.com/akalin/gopar/par2"
 )
 
 // Benchmarks for plan item 7.2: the cost of entering a directory with
@@ -37,12 +35,11 @@ func benchDirectory(b *testing.B) string {
 		if err := os.WriteFile(data, content, 0o644); err != nil {
 			b.Fatal(err)
 		}
-		runner := goparRunner{}
-		if err := runner.Create(data+".par2", []string{data}, gopar.CreateOptions{
+		runner := defaultRunner{}
+		if err := runner.Create(data+".par2", []string{data}, par2.CreateOptions{
 			SliceByteCount:  par2.CalculateBlockSize(benchFileSize, 5),
 			NumParityShards: -1,
 			NumGoroutines:   1,
-			CreateDelegate:  gopar.DoNothingCreateDelegate{},
 		}); err != nil {
 			b.Fatal(err)
 		}

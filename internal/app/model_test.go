@@ -11,7 +11,6 @@ import (
 	"partui/internal/index"
 	"partui/internal/par2"
 
-	gopar "github.com/akalin/gopar/par2"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -196,11 +195,10 @@ func writeValidPar2(t *testing.T, dir, title string, content []byte) {
 	t.Helper()
 	data := filepath.Join(dir, title)
 	require.NoError(t, os.WriteFile(data, content, 0o644))
-	require.NoError(t, goparRunner{}.Create(data+".par2", []string{data}, gopar.CreateOptions{
+	require.NoError(t, defaultRunner{}.Create(data+".par2", []string{data}, par2.CreateOptions{
 		SliceByteCount:  par2.CalculateBlockSize(uint64(len(content)), 5),
 		NumParityShards: -1,
 		NumGoroutines:   1,
-		CreateDelegate:  gopar.DoNothingCreateDelegate{},
 	}))
 }
 
