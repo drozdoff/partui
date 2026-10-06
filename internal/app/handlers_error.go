@@ -8,6 +8,30 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// Error handling policy (plan item 4.1). Every failure in internal/ is
+// classified as one of three levels; there is no separate ErrorHandler type
+// — its roles are taken by reportError (reportable), logStoreError and the
+// plain logger (ignored with a log) and by Run/run (fatal).
+//
+//	Level              When                                          Action
+//	-----------------  --------------------------------------------  --------------------------------------
+//	fatal              continuing is impossible: no log file, no     log Error → stderr → exit(1);
+//	                   start directory, the UI itself failed         only in Run/run, before the UI starts
+//	reportable         database operations, PAR2 create/verify,      log + red error line in the UI via
+//	                   directory reads during navigation             reportError; the model state is
+//	                                                                 rolled back (the item leaves
+//	                                                                 processing)
+//	ignored with       soft degradations: a status save or a         log Warn, work continues, the
+//	a log              cleanup pass failed                           status does not change
+//
+// Selection rule: if a failure breaks a model invariant (an item would stay
+// in processing forever), the reportable level is mandatory; if only
+// statistics or persistence did not happen, a log entry is enough.
+//
+// Worker goroutines report their outcome exclusively via tea.Msg
+// (parCreateErrorMsg, indexVerifyFinishedMsg): the handler is the single
+// place that both shows the error line and restores the model state.
+
 // errorVisibleFor is how long an error reported via reportError stays on
 // screen before the clearErrorMsg tick removes it
 const errorVisibleFor = 5 * time.Second

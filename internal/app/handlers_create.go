@@ -1,7 +1,6 @@
 package app
 
 import (
-	"log/slog"
 	"partui/internal/index"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -11,9 +10,11 @@ import (
 // index record and refreshes the index list and the bottom panel
 func (m *Model) handleParCreateFinished(msg parCreateFinishedMsg) tea.Cmd {
 	// Update indexes database. The record is about the .par2 file,
-	// not the source file: msg.title is the source file name
+	// not the source file: msg.title is the source file name.
+	// Ignored-with-log level: the archive exists, only the persistent
+	// status is lost and will be restored on the next verification
 	if err := m.app.store.Put(msg.dir, msg.title+".par2", index.StatusOK, m.app.now()); err != nil {
-		m.app.logger.Warn("failed to save index to database", slog.String("error", err.Error()))
+		m.app.logStoreError("failed to save index to database", err)
 	}
 
 	// mark the source file as archived

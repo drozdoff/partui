@@ -118,6 +118,11 @@ func (a *App) logStoreError(msg string, err error) {
 	a.logger.Warn(msg, slog.String("error", err.Error()))
 }
 
+// createParFiles builds a PAR2 archive for a single file in a worker
+// goroutine. It always reports the outcome to the UI — either
+// parCreateFinishedMsg or parCreateErrorMsg — so a file marked as
+// processing never stays in that state (plan item 4.1); the only exception
+// is a shutdown while the task is still queued for a worker slot.
 func (a *App) createParFiles(dir string, title string, size uint64) {
 	a.logger.Debug("starting PAR2 creation",
 		slog.String("dir", dir),
@@ -154,6 +159,10 @@ func (a *App) createParFiles(dir string, title string, size uint64) {
 	a.program.Send(parCreateFinishedMsg{dir: dir, title: title, size: size})
 }
 
+// verifyParFiles verifies a single PAR2 file in a worker goroutine and
+// always reports the outcome as indexVerifyFinishedMsg — OK, Damaged,
+// Unverifiable or Missing — so an index set to processing by verifySelected
+// always reaches a final status (plan item 4.1).
 func (a *App) verifyParFiles(dir string, item indexListItem) {
 	a.logger.Debug("starting PAR2 verification",
 		slog.String("dir", dir),

@@ -42,7 +42,8 @@ func run(logger *slog.Logger) error {
 	defer app.Shutdown()
 
 	// Initialize the index store; on failure the app keeps running in
-	// degraded mode (noopStore) without the index memory
+	// degraded mode (noopStore) without the index memory. Reportable level:
+	// the degradation is visible in the UI as "DB: недоступна"
 	store, err := newBboltStore(index.GetDBPath())
 	if err != nil {
 		logger.Error("failed to open index database",
@@ -92,8 +93,12 @@ func run(logger *slog.Logger) error {
 
 		// Start verify workers for old indexes
 		for _, idx := range oldIndexes {
-			// set old indexes status to processing
-			app.store.UpdateStatus(idx.Dir, idx.Filename, index.StatusProcessing)
+			// set old indexes status to processing; on failure the stale
+			// status stays until the verification overwrites it with the
+			// real result, so a log entry is enough
+			if err := app.store.UpdateStatus(idx.Dir, idx.Filename, index.StatusProcessing); err != nil {
+				app.logStoreError("failed to mark index as processing", err)
+			}
 
 			// start verify goroutine
 			app.launch(func() {

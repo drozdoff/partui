@@ -198,7 +198,9 @@ func (m *Model) verifySelected() tea.Cmd {
 		return nil
 	}
 	// only .par2 files can be verified; the expanded list may still
-	// contain legacy records stored under source file names
+	// contain legacy records stored under source file names. Defensive
+	// check: startup cleanup removes such records, so the branch is next
+	// to unreachable; the item is left untouched, a log entry is enough
 	if !isPar2Name(item.par2Filename) {
 		m.app.logger.Warn("refusing to verify a record without .par2 extension",
 			slog.String("dir", item.dir),
@@ -210,8 +212,10 @@ func (m *Model) verifySelected() tea.Cmd {
 	m.indexList.SetItem(m.indexList.Index(), item)
 	m.indexList.CursorDown()
 
+	// Ignored-with-log level: the item is already shown as processing and
+	// the verification result overwrites the status anyway
 	if err := m.app.store.UpdateStatus(item.dir, item.par2Filename, index.StatusProcessing); err != nil {
-		m.app.logger.Warn("failed to update index status in database", slog.String("error", err.Error()))
+		m.app.logStoreError("failed to update index status in database", err)
 	}
 	m.refreshStats()
 	m.app.launch(func() {
