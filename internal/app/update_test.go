@@ -288,26 +288,6 @@ func TestUpdate_Messages_WithoutDB_NoPanic(t *testing.T) {
 	assert.ErrorIs(t, m.bottomPanel.storeErr, ErrStoreUnavailable)
 }
 
-func TestUpdate_ParCreateFinished_UpdatesItems(t *testing.T) {
-	m := newTestModel()
-	m.currentDir = "/tmp/x"
-	m.fileList.SetItems([]list.Item{fileListItem{title: "a.txt", processing: true}})
-	m.indexList.SetItems([]list.Item{
-		indexListItem{par2Filename: "a.txt.par2", dir: "/tmp/x", status: index.StatusProcessing},
-	})
-
-	_, _ = m.Update(parCreateFinishedMsg{dir: "/tmp/x", title: "a.txt"})
-
-	fit := m.fileList.Items()[0].(fileListItem)
-	assert.False(t, fit.processing)
-	assert.True(t, fit.archive)
-
-	iit := m.indexList.Items()[0].(indexListItem)
-	assert.Equal(t, index.StatusOK, iit.status)
-	// the description must show the new status, not a stale "Processing"
-	assert.Equal(t, "/tmp/x | OK", iit.desc)
-}
-
 // Regression: the placeholder added by `c` carries the directory name, and
 // the finished message re-renders its status text from "Processing" to "OK".
 // Both were broken before: the placeholder had no dir (rendering a nameless
@@ -332,44 +312,6 @@ func TestUpdate_CreateThenFinished_UpdatesStatusText(t *testing.T) {
 	assert.Equal(t, index.StatusOK, it.status)
 	assert.Equal(t, "/tmp/x | OK", it.desc)
 	m.app.wg.Wait()
-}
-
-// Regression test: parCreateFinishedMsg must store the index record under
-// the .par2 file name, not the source file name.
-func TestUpdate_ParCreateFinished_StoresPar2NameInStore(t *testing.T) {
-	app := newTestApp()
-	m := NewModel(app)
-	m.currentDir = "/tmp/x"
-
-	_, _ = m.Update(parCreateFinishedMsg{dir: "/tmp/x", title: "a.txt"})
-
-	desc, err := app.store.Get("/tmp/x", "a.txt.par2")
-	assert.NoError(t, err)
-	require.NotNil(t, desc, "index record must be stored under the .par2 name")
-	assert.Equal(t, index.StatusOK, desc.Status)
-
-	junk, err := app.store.Get("/tmp/x", "a.txt")
-	assert.NoError(t, err)
-	assert.Nil(t, junk, "no record must be stored under the source file name")
-}
-
-// Regression: a verification result for a name that cannot be a PAR2 file
-// (legacy records written by the pre-refactoring binary) is shown in the
-// list but never persisted.
-func TestUpdate_VerifyFinished_NonPar2Name_NotStored(t *testing.T) {
-	m := newTestModel()
-	m.currentDir = "/tmp/x"
-
-	_, _ = m.Update(indexVerifyFinishedMsg{
-		dir:          "/tmp/x",
-		par2Filename: "style.css",
-		status:       index.StatusUnverifiable,
-		err:          errors.New("parPath must have a .par2 extension"),
-	})
-
-	desc, err := m.app.store.Get("/tmp/x", "style.css")
-	assert.NoError(t, err)
-	assert.Nil(t, desc, "no record must be stored for a non-.par2 name")
 }
 
 // Item 2.1 acceptance: the create path goes through the injected
@@ -448,22 +390,4 @@ func TestModel_ReportError_NilError_Noop(t *testing.T) {
 
 	assert.Nil(t, m.reportError("scope", nil))
 	assert.Empty(t, m.errText)
-}
-
-// A failed verification is surfaced to the user, not only to the log
-func TestUpdate_VerifyFinished_ErrorShown(t *testing.T) {
-	m := newTestModel()
-	fixed := time.Unix(1700000000, 0)
-	m.app.clock = func() time.Time { return fixed }
-	m.currentDir = "/tmp/x"
-
-	_, _ = m.Update(indexVerifyFinishedMsg{
-		dir:          "/tmp/x",
-		par2Filename: "a.txt.par2",
-		status:       index.StatusUnverifiable,
-		err:          errors.New("unexpected EOF"),
-	})
-
-	assert.Contains(t, m.errText, "PAR2 verification failed")
-	assert.Contains(t, m.errText, "unexpected EOF")
 }

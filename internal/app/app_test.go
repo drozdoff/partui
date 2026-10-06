@@ -1,6 +1,7 @@
 package app
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -132,4 +133,21 @@ func TestBottomPanelView_StoreUnavailable(t *testing.T) {
 	assert.Contains(t, bp.View(80), "DB: недоступна")
 
 	assert.NotContains(t, BottomPanel{}.View(80), "DB: недоступна")
+}
+
+func TestBottomPanelView_DamagedList(t *testing.T) {
+	bp := BottomPanel{
+		totalCount: 3,
+		damagedItems: []DamagedIndex{
+			{par2Filename: "a.par2", dir: "/data/movies"},
+			{par2Filename: "b.par2", dir: "/data/books"},
+		},
+	}
+	out := bp.View(200)
+	assert.Contains(t, out, "Total: 3")
+	assert.Contains(t, out, "Damaged:")
+	assert.Contains(t, out, filepath.Join("/data/movies", "a.par2"))
+
+	// a narrow panel truncates the line instead of wrapping
+	assert.Contains(t, bp.View(30), "...")
 }

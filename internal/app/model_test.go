@@ -6,9 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"partui/internal/index"
+	"partui/internal/par2"
 
+	gopar "github.com/akalin/gopar/par2"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -141,4 +144,91 @@ func TestShortReason(t *testing.T) {
 	got := shortReason(errors.New(long))
 	assert.Len(t, []rune(got), 61) // 60 runes + the ellipsis
 	assert.True(t, strings.HasSuffix(got, "…"))
+}
+
+// writeValidPar2 creates a real .par2 archive for a small data file, with
+// the same options createParFiles uses
+func writeValidPar2(t *testing.T, dir, title string, content []byte) {
+	t.Helper()
+	data := filepath.Join(dir, title)
+	require.NoError(t, os.WriteFile(data, content, 0o644))
+	require.NoError(t, goparRunner{}.Create(data+".par2", []string{data}, gopar.CreateOptions{
+		SliceByteCount:  par2.CalculateBlockSize(uint64(len(content)), 5),
+		NumParityShards: -1,
+		NumGoroutines:   1,
+		CreateDelegate:  gopar.DoNothingCreateDelegate{},
+	}))
+}
+
+// readIndexItems reads dir and builds the index list items from it
+func readIndexItems(t *testing.T, m *Model) []indexListItem {
+	t.Helper()
+	osFiles, err := os.ReadDir(m.currentDir)
+	require.NoError(t, err)
+	items := m.processIndexFiles(osFiles)
+	result := make([]indexListItem, len(items))
+	for i, it := range items {
+		result[i] = it.(indexListItem)
+	}
+	return result
+}
+
+// Item 5.1: an index already present in the database keeps its stored
+// status and LastVerified.
+func TestProcessIndexFiles_UsesStoredDescriptor(t *testing.T) {
+	dir := t.TempDir()
+	writeValidPar2(t, dir, "a.txt", []byte("content"))
+
+	old := time.Unix(1700000000, 0)
+	st := newFakeStore()
+	require.NoError(t, st.Put(dir, "a.txt.par2", index.StatusDamaged, old))
+
+	m := newTestModel()
+	m.app.store = st
+	m.currentDir = dir
+
+	items := readIndexItems(t, m)
+	require.Len(t, items, 1)
+	assert.Equal(t, index.StatusDamaged, items[0].status)
+	assert.WithinDuration(t, old, items[0].lastVerified, time.Second)
+}
+
+// A new .par2 file is stored as OK with the current time
+func TestProcessIndexFiles_NewIndexIsStoredAsOK(t *testing.T) {
+	dir := t.TempDir()
+	writeValidPar2(t, dir, "a.txt", []byte("content"))
+
+	fixed := time.Unix(1700000000, 0)
+	st := newFakeStore()
+	m := newTestModel()
+	m.app.clock = func() time.Time { return fixed }
+	m.app.store = st
+	m.currentDir = dir
+
+	items := readIndexItems(t, m)
+	require.Len(t, items, 1)
+	assert.Equal(t, index.StatusOK, items[0].status)
+	assert.Equal(t, fixed, items[0].lastVerified, "a fresh record gets the current time")
+
+	desc, err := st.Get(dir, "a.txt.par2")
+	require.NoError(t, err)
+	require.NotNil(t, desc, "the record must be persisted under the .par2 name")
+}
+
+// A failing store does not hide the index: the item stays visible with the
+// default status, the failure is only logged
+func TestProcessIndexFiles_StoreErrorKeepsItem(t *testing.T) {
+	dir := t.TempDir()
+	writeValidPar2(t, dir, "a.txt", []byte("content"))
+
+	st := newFakeStore()
+	st.err = errors.New("db is broken")
+	m := newTestModel()
+	m.app.store = st
+	m.currentDir = dir
+
+	items := readIndexItems(t, m)
+	require.Len(t, items, 1)
+	assert.Equal(t, index.StatusOK, items[0].status)
+	assert.True(t, items[0].lastVerified.IsZero())
 }

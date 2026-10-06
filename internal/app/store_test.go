@@ -44,6 +44,9 @@ func TestNoopStore_AllMethodsUnavailable(t *testing.T) {
 	assert.Empty(t, old)
 	assert.ErrorIs(t, err, ErrStoreUnavailable)
 
+	err = st.Delete("/d", "a.par2")
+	assert.ErrorIs(t, err, ErrStoreUnavailable)
+
 	err = st.Close()
 	assert.ErrorIs(t, err, ErrStoreUnavailable)
 }

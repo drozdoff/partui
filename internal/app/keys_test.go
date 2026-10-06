@@ -245,6 +245,44 @@ func TestKeys_Table(t *testing.T) {
 				assert.False(t, m.indexListExpanded)
 			},
 		},
+		{
+			name: "v in the expanded list verifies the selected index",
+			setup: func(t *testing.T, m *Model) {
+				m.app.cancel()
+				m.indexListExpanded = true
+				m.focus = FocusIndex
+				require.NoError(t, m.app.store.Put("/d", "a.txt.par2", index.StatusOK, fixed))
+				m.indexList.SetItems([]list.Item{
+					indexListItem{par2Filename: "a.txt.par2", dir: "/d", status: index.StatusOK},
+				})
+			},
+			key: "v",
+			check: func(t *testing.T, m *Model) {
+				it := m.indexList.Items()[0].(indexListItem)
+				assert.Equal(t, index.StatusProcessing, it.status)
+
+				desc, err := m.app.store.Get("/d", "a.txt.par2")
+				require.NoError(t, err)
+				require.NotNil(t, desc)
+				assert.Equal(t, index.StatusProcessing, desc.Status)
+				m.app.wg.Wait()
+			},
+		},
+		{
+			name: "an unknown key in the expanded list does nothing",
+			setup: func(t *testing.T, m *Model) {
+				m.indexListExpanded = true
+				m.focus = FocusIndex
+				m.indexList.SetItems([]list.Item{
+					indexListItem{par2Filename: "a.txt.par2", dir: "/d", status: index.StatusOK},
+				})
+			},
+			key: "x",
+			check: func(t *testing.T, m *Model) {
+				it := m.indexList.Items()[0].(indexListItem)
+				assert.Equal(t, index.StatusOK, it.status)
+			},
+		},
 	}
 
 	for _, tc := range tests {

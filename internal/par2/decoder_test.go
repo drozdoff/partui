@@ -1,10 +1,15 @@
 package par2
 
 import (
+	"bytes"
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 
+	gopar "github.com/akalin/gopar/par2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestCalculateBlockSize_Boundaries pins the block size at the size
@@ -212,4 +217,28 @@ func TestCalculateBlockSize_Boundary4MB(t *testing.T) {
 	// Final: (13333/4 + 1) * 4 = (3333 + 1) * 4 = 13336
 	result := CalculateBlockSize(3999999, 5)
 	assert.Equal(t, 13336, result)
+}
+
+// Item 5.1: ListPar2Filenames must return the protected data files of a
+// real archive; a file that is not a PAR2 archive is an error. The decoder
+// pass also exercises every FilenameCollector callback.
+func TestListPar2Filenames(t *testing.T) {
+	dir := t.TempDir()
+	data := filepath.Join(dir, "test.txt")
+	require.NoError(t, os.WriteFile(data, bytes.Repeat([]byte("x"), 64_000), 0o644))
+
+	require.NoError(t, gopar.Create(data+".par2", []string{data}, gopar.CreateOptions{
+		SliceByteCount:  CalculateBlockSize(64_000, 5),
+		NumParityShards: -1,
+		NumGoroutines:   1,
+		CreateDelegate:  gopar.DoNothingCreateDelegate{},
+	}))
+
+	names, err := ListPar2Filenames(data + ".par2")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"test.txt"}, names)
+
+	// a non-archive file is an error, not an empty list
+	_, err = ListPar2Filenames(data)
+	assert.Error(t, err)
 }
