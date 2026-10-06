@@ -111,7 +111,13 @@ func (m *Model) buildModelForDirectory(dir string) error {
 		name := file.Name()
 
 		fileInfo, err := file.Info()
-		if err != nil || hiddenFile(name) {
+		if err != nil {
+			continue
+		}
+
+		// .par2 files live in the index list, not here; dotfiles show up
+		// only with show_hidden in the config (plan item 6.1)
+		if filepath.Ext(name) == ".par2" || (!m.app.cfg.ShowHidden && strings.HasPrefix(name, ".")) {
 			continue
 		}
 
@@ -193,11 +199,6 @@ func shortReason(err error) string {
 // such names may be verified and stored in the index database.
 func isPar2Name(filename string) bool {
 	return strings.HasSuffix(strings.ToLower(filename), ".par2")
-}
-
-func hiddenFile(name string) bool {
-	// ignore hidden files and .par2 files
-	return strings.HasPrefix(name, ".") || filepath.Ext(name) == ".par2"
 }
 
 func (m *Model) processIndexFiles(files []os.DirEntry) []list.Item {

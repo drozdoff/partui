@@ -13,12 +13,25 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// Run initializes logging and runs the application. It reports an error only
-// for fatal startup problems; the error is logged here as well, the caller
-// (cmd/partui) just turns it into a non-zero exit code.
+// Run loads the configuration, initializes logging and runs the application.
+// It reports an error only for fatal startup problems; the error is logged
+// here as well, the caller (cmd/partui) just turns it into a non-zero exit
+// code. Config and logging failures happen before a logger exists, so they
+// go straight to stderr.
 func Run() error {
-	logger := initLogger()
-	if err := run(logger); err != nil {
+	cfg, err := config.Load("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
+		return err
+	}
+
+	logger, err := initLogger(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize logging: %v\n", err)
+		return err
+	}
+
+	if err := run(logger, cfg); err != nil {
 		logger.Error("fatal error", slog.String("error", err.Error()))
 		fmt.Printf("Something went wrong: %v", err)
 		return err
@@ -28,15 +41,22 @@ func Run() error {
 
 // run wires up the application, starts the UI and blocks until it finishes.
 // It is the only place allowed to terminate the app on error (via main).
-func run(logger *slog.Logger) error {
+func run(logger *slog.Logger, cfg config.Config) error {
 	logger.Info("starting PartUI")
+	logger.Debug("configuration loaded",
+		slog.Int("percentage", cfg.Percentage),
+		slog.Int("max_workers", cfg.MaxWorkers),
+		slog.Int("reverify_days", cfg.ReverifyDays),
+		slog.Bool("show_hidden", cfg.ShowHidden),
+		slog.String("log_level", cfg.LogLevel),
+		slog.String("log_file", cfg.LogFile))
 
 	name, err := filepath.Abs(os.Args[0])
 	if err != nil {
 		return fmt.Errorf("resolve executable path: %w", err)
 	}
 
-	app := NewApp(config.Defaults(), logger)
+	app := NewApp(cfg, logger)
 	// Shutdown cancels the context, waits for goroutines and closes the
 	// store — strictly in that order
 	defer app.Shutdown()

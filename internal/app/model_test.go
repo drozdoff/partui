@@ -136,6 +136,33 @@ func TestBuildModelForDirectory_UnreadablePar2(t *testing.T) {
 	assert.Equal(t, "../", m.fileList.Items()[0].(fileListItem).title)
 }
 
+// Item 6.1: show_hidden in the config makes dotfiles visible; .par2 files
+// stay in the index list either way.
+func TestBuildModelForDirectory_ShowHidden(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"visible.txt", ".hidden.txt"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("content"), 0o644))
+	}
+
+	titles := func(m *Model) []string {
+		items := m.fileList.Items()
+		result := make([]string, 0, len(items))
+		for _, it := range items {
+			result = append(result, it.(fileListItem).title)
+		}
+		return result
+	}
+
+	m := newTestModel()
+	require.NoError(t, m.buildModelForDirectory(dir))
+	assert.Contains(t, titles(m), "visible.txt")
+	assert.NotContains(t, titles(m), ".hidden.txt")
+
+	m.app.cfg.ShowHidden = true
+	require.NoError(t, m.buildModelForDirectory(dir))
+	assert.Contains(t, titles(m), ".hidden.txt")
+}
+
 func TestShortReason(t *testing.T) {
 	assert.Equal(t, "boom", shortReason(errors.New("boom")))
 	assert.Equal(t, "first line", shortReason(errors.New("first line\nsecond line")))
