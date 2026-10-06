@@ -174,7 +174,8 @@ func (m *Model) openSelected() tea.Cmd {
 
 	// A failed navigation keeps the model in the current directory and is
 	// reported in the UI; only startup failures are fatal (plan item 4.1)
-	if err := m.buildModelForDirectory(newDir); err != nil {
+	loadCmd, err := m.buildModelForDirectory(newDir)
+	if err != nil {
 		return m.reportError("change directory", err)
 	}
 	// If going to parent, select the directory we came from
@@ -184,7 +185,7 @@ func (m *Model) openSelected() tea.Cmd {
 			m.fileList.Select(idx)
 		}
 	}
-	return nil
+	return loadCmd
 }
 
 // verifySelected starts verification of the selected index; it requires the
@@ -258,22 +259,22 @@ func (m *Model) rebuildIndexListAll() {
 	m.setIndexList(items, "All Indexes from Database (Press Esc to return)")
 }
 
-// collapseIndexList rebuilds the index list from the local directory
+// collapseIndexList rebuilds the index list from the .par2 files of the
+// current directory — the collapsed mode. Archives that appeared since the
+// last build are parsed by the returned background command (plan item 7.2).
 func (m *Model) collapseIndexList() tea.Cmd {
 	m.indexListExpanded = false
-	m.rebuildIndexListLocal()
-	return nil
-}
-
-// rebuildIndexListLocal refills the index list from the .par2 files of the
-// current directory — the collapsed mode
-func (m *Model) rebuildIndexListLocal() {
 	osFiles, err := os.ReadDir(m.currentDir)
 	if err != nil {
 		m.reportError("read directory", err)
-		return
+		return nil
 	}
-	m.setIndexList(m.processIndexFiles(osFiles), "Index Files")
+	scan := m.processIndexFiles(osFiles)
+	m.setIndexList(scan.items, "Index Files")
+	if len(scan.pending) == 0 {
+		return nil
+	}
+	return m.loadArchivedCmd(m.currentDir, scan.pending)
 }
 
 // setIndexList replaces the index list with the given items under the

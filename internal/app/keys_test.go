@@ -302,7 +302,8 @@ func TestKeys_Enter_OnParent_RestoresCursor(t *testing.T) {
 
 	m := newTestModel()
 	// start inside the subdirectory; the only entry is "../"
-	require.NoError(t, m.buildModelForDirectory(filepath.Join(root, "sub")))
+	_, err := m.buildModelForDirectory(filepath.Join(root, "sub"))
+	require.NoError(t, err)
 
 	pressKey(m, "enter")
 
@@ -318,7 +319,8 @@ func TestKeys_Enter_OnFile_DoesNothing(t *testing.T) {
 	dir := keyDir(t)
 
 	m := newTestModel()
-	require.NoError(t, m.buildModelForDirectory(dir))
+	_, err := m.buildModelForDirectory(dir)
+	require.NoError(t, err)
 	// cursor on a.txt: "../", "sub/", "a.txt", "b.bin"
 	m.fileList.Select(2)
 

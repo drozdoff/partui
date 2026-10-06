@@ -37,6 +37,10 @@ type App struct {
 	// the capacity is cfg.MaxWorkers
 	workers chan struct{}
 
+	// par2Names caches the parsed contents of .par2 index files for the
+	// session, so navigation does not repeat the par2 IO (plan item 7.2)
+	par2Names *par2NameCache
+
 	// program is assigned right after tea.NewProgram and before any
 	// goroutine is started, so no extra synchronization is needed
 	// (happens-before via goroutine start)
@@ -49,14 +53,15 @@ type App struct {
 func NewApp(cfg config.Config, logger *slog.Logger) *App {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &App{
-		cfg:     cfg,
-		logger:  logger,
-		store:   newNoopStore(logger),
-		par2:    goparRunner{},
-		clock:   time.Now,
-		ctx:     ctx,
-		cancel:  cancel,
-		workers: make(chan struct{}, cfg.MaxWorkers),
+		cfg:       cfg,
+		logger:    logger,
+		store:     newNoopStore(logger),
+		par2:      goparRunner{},
+		clock:     time.Now,
+		ctx:       ctx,
+		cancel:    cancel,
+		workers:   make(chan struct{}, cfg.MaxWorkers),
+		par2Names: newPar2NameCache(),
 	}
 }
 

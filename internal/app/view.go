@@ -10,7 +10,12 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// Init hands the background load of the start directory's archives to the
+// program along with the window title
 func (m *Model) Init() tea.Cmd {
+	if m.startupCmd != nil {
+		return tea.Batch(m.startupCmd, tea.SetWindowTitle("Partui"))
+	}
 	return tea.SetWindowTitle("Partui")
 }
 

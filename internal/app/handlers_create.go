@@ -17,6 +17,12 @@ func (m *Model) handleParCreateFinished(msg parCreateFinishedMsg) tea.Cmd {
 		m.app.logStoreError("failed to save index to database", err)
 	}
 
+	// the archive was just rewritten: seed the session cache with what we
+	// know we wrote, so the next visit needs no par2 IO for it (plan item
+	// 7.2; the mtime comparison alone could mistake the new file for a
+	// stale entry on filesystems with coarse timestamps)
+	m.app.par2Names.seed(msg.dir, msg.title+".par2", []string{msg.title})
+
 	// mark the source file as archived
 	m.updateFileItem(msg.title, func(fi *fileListItem) {
 		fi.processing = false

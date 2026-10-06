@@ -2,10 +2,8 @@ package app
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"partui/internal/index"
-	"partui/internal/par2"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -13,6 +11,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 type ListFocus string
@@ -69,6 +68,11 @@ type Model struct {
 	// indexListExpanded - when true, indexList shows all indexes from DB
 	indexListExpanded bool
 
+	// startupCmd carries the background load of the start directory's
+	// archives into the running program: the model is built before
+	// tea.NewProgram, so Init is the only way to hand the command over
+	startupCmd tea.Cmd
+
 	// errText/errUntil hold the error reported by App.reportError; the
 	// line is shown in the bottom panel until errUntil
 	errText  string
@@ -85,11 +89,13 @@ func NewModel(app *App) *Model {
 
 // buildModelForDirectory rebuilds the model for the given directory. On
 // failure the model is left untouched, so navigation can simply report the
-// error and continue in the current directory.
-func (m *Model) buildModelForDirectory(dir string) error {
+// error and continue in the current directory. The returned command parses
+// the not yet parsed .par2 index files in the background (plan item 7.2);
+// it is nil when every archive in the directory is already parsed and fresh.
+func (m *Model) buildModelForDirectory(dir string) (tea.Cmd, error) {
 	osFiles, err := os.ReadDir(dir)
 	if err != nil {
-		return fmt.Errorf("read dir %s: %w", dir, err)
+		return nil, fmt.Errorf("read dir %s: %w", dir, err)
 	}
 
 	m.currentDir = dir
@@ -97,8 +103,15 @@ func (m *Model) buildModelForDirectory(dir string) error {
 	// Default focus on file list
 	m.focus = FocusFile
 
+	// Archive marks of the previous directory must not leak here; the marks
+	// known from the session cache are restored right below, without any
+	// par2 IO
+	m.archived = nil
+
 	items := make([]fileListItem, 0, len(osFiles)+1) // +1 for the "../" parent entry
-	indexItems := m.processIndexFiles(osFiles)
+	scan := m.processIndexFiles(osFiles)
+	m.archived = scan.archived
+	indexItems := scan.items
 
 	// unless root directory, add .. to a list of directories
 	parent := filepath.Dir(dir)
@@ -167,7 +180,12 @@ func (m *Model) buildModelForDirectory(dir string) error {
 
 	m.applyLayout()
 
-	return nil
+	// The archive marks and the honest statuses of the not yet parsed
+	// archives arrive with the background load
+	if len(scan.pending) == 0 {
+		return nil, nil
+	}
+	return m.loadArchivedCmd(dir, scan.pending), nil
 }
 
 func isParIndex(filename string) bool {
@@ -183,8 +201,7 @@ func isParIndex(filename string) bool {
 
 // shortReason compresses a parsing error to what fits into a list item
 // description; the full reason is in the log
-func shortReason(err error) string {
-	msg := err.Error()
+func shortReason(msg string) string {
 	if i := strings.IndexByte(msg, '\n'); i >= 0 {
 		msg = msg[:i]
 	}
@@ -201,60 +218,80 @@ func isPar2Name(filename string) bool {
 	return strings.HasSuffix(strings.ToLower(filename), ".par2")
 }
 
-func (m *Model) processIndexFiles(files []os.DirEntry) []list.Item {
+// indexScan is the outcome of scanning one directory for .par2 index files
+type indexScan struct {
+	// items are the ready index list entries
+	items []list.Item
+	// archived holds the data file names of the archives already parsed in
+	// this session — enough to set the file list marks without par2 IO
+	archived []string
+	// pending are the archives not parsed yet; the caller hands them to
+	// loadArchivedCmd
+	pending []string
+}
+
+// processIndexFiles builds the index list entries without any par2 IO
+// (plan item 7.2): statuses come from the database and the session cache,
+// archives that were not parsed yet go to scan.pending for the background
+// load, which also creates their initial database records — unparseable
+// files never enter the database.
+func (m *Model) processIndexFiles(files []os.DirEntry) indexScan {
+	var scan indexScan
 	indexItems := make([]indexListItem, 0)
 	for _, file := range files {
 		name := file.Name()
-		if isParIndex(name) {
-			archived, err := par2.ListPar2Filenames(filepath.Join(m.currentDir, name))
-			if err != nil {
-				// A .par2 file that cannot be parsed must not silently
-				// disappear from the index list: show it with an honest
-				// status. The full reason goes to the log.
-				m.app.logger.Warn("failed to list PAR2 filenames",
-					slog.String("dir", m.currentDir),
-					slog.String("filename", name),
-					slog.String("error", err.Error()))
-				indexItems = append(indexItems, indexListItem{
-					par2Filename: name,
-					dir:          m.currentDir,
-					status:       index.StatusUnverifiable,
-					desc:         "не удалось прочитать: " + shortReason(err),
-				})
-				continue
-			}
-			m.archived = append(m.archived, archived...)
-
-			indexItem := indexListItem{
-				par2Filename: name,
-				dir:          m.currentDir,
-				status:       index.StatusOK,
-			}
-
-			// Save to database if available
-			descriptor, err := m.app.store.Get(m.currentDir, name)
-			switch {
-			case err == nil && descriptor != nil:
-				indexItem.status = descriptor.Status
-				indexItem.lastVerified = descriptor.LastVerified
-			case err == nil:
-				now := m.app.now()
-				err = m.app.store.Put(m.currentDir, name, index.StatusOK, now)
-				if err != nil {
-					m.app.logStoreError("failed to save index to database", err)
-				} else {
-					indexItem.lastVerified = now
-				}
-			default:
-				m.app.logStoreError("failed to check index in database", err)
-			}
-
-			// Format description based on mode
-			indexItem.desc = formatIndexItemDesc(indexItem, m.indexListExpanded)
-
-			indexItems = append(indexItems, indexItem)
-
+		if !isParIndex(name) {
+			continue
 		}
+
+		indexItem := indexListItem{
+			par2Filename: name,
+			dir:          m.currentDir,
+			status:       index.StatusOK,
+		}
+
+		entry, cached := m.app.par2Names.get(m.currentDir, name)
+		switch {
+		case cached && entry.err != "":
+			// a known-broken archive: the same honest status as a fresh
+			// parse failure, the full reason was logged by the parser
+			indexItem.status = index.StatusUnverifiable
+			indexItem.desc = "не удалось прочитать: " + shortReason(entry.err)
+			indexItems = append(indexItems, indexItem)
+			continue
+		case cached:
+			scan.archived = append(scan.archived, entry.names...)
+		default:
+			scan.pending = append(scan.pending, name)
+		}
+
+		// reflect the stored status if available
+		descriptor, err := m.app.store.Get(m.currentDir, name)
+		switch {
+		case err == nil && descriptor != nil:
+			indexItem.status = descriptor.Status
+			indexItem.lastVerified = descriptor.LastVerified
+		case err == nil && cached:
+			// parsed before and not in the database: a plain record write,
+			// no par2 IO involved
+			now := m.app.now()
+			err = m.app.store.Put(m.currentDir, name, index.StatusOK, now)
+			if err != nil {
+				m.app.logStoreError("failed to save index to database", err)
+			} else {
+				indexItem.lastVerified = now
+			}
+		case err == nil:
+			// not parsed yet: the record is written by the background load
+			// after a successful parse
+		default:
+			m.app.logStoreError("failed to check index in database", err)
+		}
+
+		// Format description based on mode
+		indexItem.desc = formatIndexItemDesc(indexItem, m.indexListExpanded)
+
+		indexItems = append(indexItems, indexItem)
 	}
 
 	// Sort: damaged first, then by lastVerified ascending
@@ -273,9 +310,9 @@ func (m *Model) processIndexFiles(files []os.DirEntry) []list.Item {
 		return a.lastVerified.Compare(b.lastVerified)
 	})
 
-	items := make([]list.Item, len(indexItems))
+	scan.items = make([]list.Item, len(indexItems))
 	for i, it := range indexItems {
-		items[i] = it
+		scan.items[i] = it
 	}
-	return items
+	return scan
 }

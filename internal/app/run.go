@@ -92,9 +92,14 @@ func run(logger *slog.Logger, cfg config.Config) error {
 
 	m := NewModel(app)
 
-	if err := m.buildModelForDirectory(filepath.Dir(name)); err != nil {
+	// The background parse of the start directory's archives goes to the
+	// running program through Init: the model is built before tea.NewProgram
+	// (plan item 7.2)
+	loadCmd, err := m.buildModelForDirectory(filepath.Dir(name))
+	if err != nil {
 		return fmt.Errorf("build model for start dir %s: %w", filepath.Dir(name), err)
 	}
+	m.startupCmd = loadCmd
 
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(app.ctx))
 	app.program = p
