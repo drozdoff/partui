@@ -44,7 +44,7 @@ func run(logger *slog.Logger) error {
 	// Initialize the index store; on failure the app keeps running in
 	// degraded mode (noopStore) without the index memory. Reportable level:
 	// the degradation is visible in the UI as "DB: недоступна"
-	store, err := newBboltStore(index.GetDBPath())
+	store, err := newBboltStore(index.GetDBPath(), app.ctx, app.logger)
 	if err != nil {
 		logger.Error("failed to open index database",
 			slog.String("db_path", index.GetDBPath()),

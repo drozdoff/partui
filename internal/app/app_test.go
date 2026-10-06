@@ -1,7 +1,6 @@
 package app
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -85,8 +84,7 @@ func TestApp_Launch_CancelledWhileWaitingForSlot(t *testing.T) {
 }
 
 func TestApp_Shutdown_ClosesStore(t *testing.T) {
-	st, err := newBboltStore(filepath.Join(t.TempDir(), "test.db"))
-	require.NoError(t, err)
+	st := newTestBboltStore(t)
 
 	app := newTestApp()
 	app.store = st
@@ -94,7 +92,7 @@ func TestApp_Shutdown_ClosesStore(t *testing.T) {
 	app.Shutdown()
 
 	// any further operation must fail: the database is closed by Shutdown
-	_, err = st.All()
+	_, err := st.All()
 	assert.Error(t, err)
 }
 

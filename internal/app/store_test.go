@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -11,6 +12,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// newTestBboltStore opens a throwaway bbolt store backed by a real
+// temporary database file
+func newTestBboltStore(t *testing.T) *bboltStore {
+	t.Helper()
+	st, err := newBboltStore(filepath.Join(t.TempDir(), "test.db"), context.Background(), discardLogger())
+	require.NoError(t, err)
+	return st
+}
 
 func TestNoopStore_AllMethodsUnavailable(t *testing.T) {
 	st := newNoopStore(discardLogger())
@@ -39,8 +49,7 @@ func TestNoopStore_AllMethodsUnavailable(t *testing.T) {
 }
 
 func TestBboltStore_RoundTrip(t *testing.T) {
-	st, err := newBboltStore(filepath.Join(t.TempDir(), "test.db"))
-	require.NoError(t, err)
+	st := newTestBboltStore(t)
 	defer st.Close()
 
 	verifiedAt := time.Unix(1700000000, 0)
@@ -89,8 +98,7 @@ func TestBboltStore_RoundTrip(t *testing.T) {
 }
 
 func TestBboltStore_Delete(t *testing.T) {
-	st, err := newBboltStore(filepath.Join(t.TempDir(), "test.db"))
-	require.NoError(t, err)
+	st := newTestBboltStore(t)
 	defer st.Close()
 
 	at := time.Unix(1700000000, 0)

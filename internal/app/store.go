@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"sync"
@@ -30,29 +31,39 @@ type IndexStore interface {
 
 // bboltStore implements IndexStore on top of a bbolt database opened via
 // the index package. It is a thin wrapper: all logic lives in internal/index.
+// The context and the logger drive the write retries (plan item 4.2).
 type bboltStore struct {
-	db *bbolt.DB
+	db     *bbolt.DB
+	ctx    context.Context
+	logger *slog.Logger
 }
 
 // newBboltStore opens (or creates) the database at path
-func newBboltStore(path string) (*bboltStore, error) {
+func newBboltStore(path string, ctx context.Context, logger *slog.Logger) (*bboltStore, error) {
 	db, err := index.OpenDB(path)
 	if err != nil {
 		return nil, err
 	}
-	return &bboltStore{db: db}, nil
+	return &bboltStore{db: db, ctx: ctx, logger: logger}, nil
 }
 
 func (s *bboltStore) Get(dir, filename string) (*index.IndexDescriptor, error) {
 	return index.GetIndex(s.db, dir, filename)
 }
 
+// Put is retried: a transient bbolt file-lock timeout must not silently
+// lose a freshly written index record (plan item 4.2)
 func (s *bboltStore) Put(dir, filename string, status index.Status, verifiedAt time.Time) error {
-	return index.PutIndex(s.db, dir, filename, status, verifiedAt)
+	return retry(s.ctx, s.logger, "put index", storeWriteAttempts, func() error {
+		return index.PutIndex(s.db, dir, filename, status, verifiedAt)
+	})
 }
 
+// UpdateStatus is retried for the same reason as Put
 func (s *bboltStore) UpdateStatus(dir, filename string, status index.Status) error {
-	return index.UpdateIndexStatus(s.db, dir, filename, status)
+	return retry(s.ctx, s.logger, "update index status", storeWriteAttempts, func() error {
+		return index.UpdateIndexStatus(s.db, dir, filename, status)
+	})
 }
 
 func (s *bboltStore) Delete(dir, filename string) error {
