@@ -1,4 +1,77 @@
-Partui — TUI for PAR2 redundancy generator compatible with par2cmdline tool.
+Partui — a terminal UI for PAR2 redundancy archives, compatible with
+par2cmdline.
+
+## What it does
+
+Partui protects files against corruption and loss by generating PAR2 recovery
+sets for them, and keeps those recovery sets healthy over time. It is built in
+Go on top of [bubbletea](https://github.com/charmbracelet/bubbletea) and uses
+the [gopar](https://github.com/akalin/gopar) library, so the `.par2` files it
+produces and verifies are readable by the standard `par2cmdline` tool — and
+vice versa.
+
+The screen is split into two panels plus a statistics bar at the bottom:
+
+- **Left — file list**: browse the file system from the directory the binary
+  was started in, mark files and launch PAR2 creation for them. Files that
+  already have a `.par2` next to them are shown as archived.
+- **Right — index list**: every known PAR2 index with its status (processing /
+  verified / damaged / unverified) and the time of the last verification.
+  Pressing `i` expands this panel to a full-screen view of all indexes from
+  the database, not only the ones of the current directory.
+- **Bottom panel**: totals — how many indexes exist, how many are running and
+  which ones are damaged.
+
+Each created archive gets one index record in an embedded [bbolt](https://go.etcd.io/bbolt)
+database (`~/.partui` by default). Indexes older than the configured
+re-verification threshold are queued for verification again on startup, so a
+silent disk rot is caught instead of discovered when the data is already gone.
+
+PAR2 operations run in background workers (one per CPU by default, upper bound
+configurable); the UI stays responsive while they run and reports failures as
+a red error line above the statistics bar. Errors are classified and logged to
+`~/.partui/partui.log`; a failed database does not crash the app — it degrades
+to a read-only warning mode instead.
+
+## Key bindings
+
+### Global
+
+| Key                          | Action                                              |
+|------------------------------|-----------------------------------------------------|
+| `q`, `Ctrl+C`                | Quit partui                                          |
+| `Tab`                        | Switch focus between the file list and the index list |
+| `↑` `↓` `PgUp` `PgDn` `Home` `End` | Move the cursor in the focused list           |
+| `i`                          | Expand the index list to all indexes from the database (full screen) |
+
+### File list (left panel)
+
+| Key    | Action                                                                        |
+|--------|-------------------------------------------------------------------------------|
+| `Space`| Mark / unmark the file under the cursor for archiving and move down (directories and already archived files are skipped) |
+| `c`    | Create a PAR2 archive for every marked file — or for the file under the cursor if nothing is marked |
+| `Enter`| Open the selected directory                                                   |
+
+### Index list (right panel, both collapsed and expanded)
+
+| Key   | Action                                                                         |
+|-------|--------------------------------------------------------------------------------|
+| `v`   | Verify the selected PAR2 index                                                  |
+| `d`   | Delete the selected index record — with a confirmation; the `.par2` files on disk are not touched |
+
+### Expanded index list (full screen)
+
+| Key   | Action                                    |
+|-------|-------------------------------------------|
+| `Esc` | Collapse back to the two-panel view        |
+
+### Delete confirmation
+
+| Key                          | Action                                            |
+|------------------------------|---------------------------------------------------|
+| `↑` `↓` `←` `→` or `Tab`     | Toggle between **Delete** and **Cancel** (Cancel is the default) |
+| `Enter`                      | Apply the selected answer                          |
+| `Esc`                        | Close the dialog without deleting                  |
 
 ## Running
 

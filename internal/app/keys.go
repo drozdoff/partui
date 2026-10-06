@@ -13,6 +13,11 @@ import (
 // handleKeyMsg splits key handling into a common layer (quit, focus toggle,
 // navigation, expanding the index list) and per-focus layers
 func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// the confirmation dialog is modal: it consumes every key, so the
+	// lists cannot change between the 'd' press and the answer
+	if m.confirm != nil {
+		return m.handleKeyConfirm(msg)
+	}
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, tea.Quit
@@ -72,6 +77,8 @@ func (m *Model) handleKeyIndex(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "v":
 		return m, m.verifySelected()
+	case "d":
+		return m, m.deleteSelected()
 	}
 	return m, nil
 }
@@ -84,6 +91,8 @@ func (m *Model) handleKeyExpanded(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.collapseIndexList()
 	case "v":
 		return m, m.verifySelected()
+	case "d":
+		return m, m.deleteSelected()
 	}
 	return m, nil
 }

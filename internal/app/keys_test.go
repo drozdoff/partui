@@ -36,6 +36,10 @@ func pressKey(m *Model, key string) {
 		msg = tea.KeyMsg{Type: tea.KeyEsc}
 	case "tab":
 		msg = tea.KeyMsg{Type: tea.KeyTab}
+	case "up":
+		msg = tea.KeyMsg{Type: tea.KeyUp}
+	case "down":
+		msg = tea.KeyMsg{Type: tea.KeyDown}
 	default:
 		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
 	}
@@ -283,6 +287,142 @@ func TestKeys_Table(t *testing.T) {
 				assert.Equal(t, index.StatusOK, it.status)
 			},
 		},
+		{
+			name: "d opens the confirmation with Отмена as the default",
+			setup: func(t *testing.T, m *Model) {
+				m.focus = FocusIndex
+				require.NoError(t, m.app.store.Put("/d", "a.txt.par2", index.StatusOK, fixed))
+				m.indexList.SetItems([]list.Item{
+					indexListItem{par2Filename: "a.txt.par2", dir: "/d", status: index.StatusOK},
+				})
+			},
+			key: "d",
+			check: func(t *testing.T, m *Model) {
+				require.NotNil(t, m.confirm)
+				assert.Equal(t, confirmCancel, m.confirm.selected)
+				assert.Equal(t, "a.txt.par2", m.confirm.item.par2Filename)
+
+				// nothing is deleted until Enter on "Удалить"
+				assert.Len(t, m.indexList.Items(), 1)
+				desc, err := m.app.store.Get("/d", "a.txt.par2")
+				require.NoError(t, err)
+				assert.NotNil(t, desc)
+			},
+		},
+		{
+			name: "d is ignored while the file list has focus",
+			setup: func(t *testing.T, m *Model) {
+				m.focus = FocusFile
+				m.indexList.SetItems([]list.Item{
+					indexListItem{par2Filename: "a.txt.par2", dir: "/d", status: index.StatusOK},
+				})
+			},
+			key: "d",
+			check: func(t *testing.T, m *Model) {
+				assert.Nil(t, m.confirm)
+			},
+		},
+		{
+			name: "d on a processing index is refused",
+			setup: func(t *testing.T, m *Model) {
+				m.focus = FocusIndex
+				m.indexList.SetItems([]list.Item{
+					indexListItem{par2Filename: "a.txt.par2", dir: "/d", status: index.StatusProcessing},
+				})
+			},
+			key: "d",
+			check: func(t *testing.T, m *Model) {
+				assert.Nil(t, m.confirm)
+			},
+		},
+		{
+			name: "enter on the default Отмена keeps the record",
+			setup: func(t *testing.T, m *Model) {
+				m.focus = FocusIndex
+				require.NoError(t, m.app.store.Put("/d", "a.txt.par2", index.StatusOK, fixed))
+				m.indexList.SetItems([]list.Item{
+					indexListItem{par2Filename: "a.txt.par2", dir: "/d", status: index.StatusOK},
+				})
+				m.confirm = &confirmDialog{
+					item:     indexListItem{par2Filename: "a.txt.par2", dir: "/d"},
+					selected: confirmCancel,
+				}
+			},
+			key: "enter",
+			check: func(t *testing.T, m *Model) {
+				assert.Nil(t, m.confirm)
+				assert.Len(t, m.indexList.Items(), 1)
+				desc, err := m.app.store.Get("/d", "a.txt.par2")
+				require.NoError(t, err)
+				assert.NotNil(t, desc)
+			},
+		},
+		{
+			name: "enter on Удалить removes the record and the entry",
+			setup: func(t *testing.T, m *Model) {
+				m.focus = FocusIndex
+				require.NoError(t, m.app.store.Put("/d", "a.txt.par2", index.StatusOK, fixed))
+				m.indexList.SetItems([]list.Item{
+					indexListItem{par2Filename: "a.txt.par2", dir: "/d", status: index.StatusOK},
+					indexListItem{par2Filename: "b.bin.par2", dir: "/d", status: index.StatusOK},
+				})
+				m.confirm = &confirmDialog{
+					item:     indexListItem{par2Filename: "a.txt.par2", dir: "/d"},
+					selected: confirmDelete,
+				}
+			},
+			key: "enter",
+			check: func(t *testing.T, m *Model) {
+				assert.Nil(t, m.confirm)
+
+				desc, err := m.app.store.Get("/d", "a.txt.par2")
+				require.NoError(t, err)
+				assert.Nil(t, desc)
+
+				// the neighbour entry stays
+				require.Len(t, m.indexList.Items(), 1)
+				it := m.indexList.Items()[0].(indexListItem)
+				assert.Equal(t, "b.bin.par2", it.par2Filename)
+			},
+		},
+		{
+			name: "esc closes the dialog and keeps the record",
+			setup: func(t *testing.T, m *Model) {
+				m.focus = FocusIndex
+				require.NoError(t, m.app.store.Put("/d", "a.txt.par2", index.StatusOK, fixed))
+				m.confirm = &confirmDialog{
+					item:     indexListItem{par2Filename: "a.txt.par2", dir: "/d"},
+					selected: confirmDelete,
+				}
+			},
+			key: "esc",
+			check: func(t *testing.T, m *Model) {
+				assert.Nil(t, m.confirm)
+				desc, err := m.app.store.Get("/d", "a.txt.par2")
+				require.NoError(t, err)
+				assert.NotNil(t, desc)
+			},
+		},
+		{
+			name: "keys do not reach the lists while the dialog is open",
+			setup: func(t *testing.T, m *Model) {
+				m.indexList.SetItems([]list.Item{
+					indexListItem{par2Filename: "a.txt.par2", dir: "/d", status: index.StatusOK},
+					indexListItem{par2Filename: "b.bin.par2", dir: "/d", status: index.StatusOK},
+					indexListItem{par2Filename: "c.par2", dir: "/d", status: index.StatusOK},
+				})
+				m.confirm = &confirmDialog{
+					item:     indexListItem{par2Filename: "a.txt.par2", dir: "/d"},
+					selected: confirmCancel,
+				}
+			},
+			key: "down",
+			check: func(t *testing.T, m *Model) {
+				// the dialog handled the key, the list cursor did not move
+				assert.Equal(t, confirmDelete, m.confirm.selected)
+				assert.Equal(t, 0, m.indexList.Index())
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -295,6 +435,47 @@ func TestKeys_Table(t *testing.T) {
 			tc.check(t, m)
 		})
 	}
+}
+
+// The full confirmation flow: 'd' opens the dialog with "Отмена" as the
+// default, arrows toggle the choice, Enter applies it
+func TestDeleteConfirm_Flow(t *testing.T) {
+	m := newTestModel()
+	m.focus = FocusIndex
+	require.NoError(t, m.app.store.Put("/d", "a.par2", index.StatusOK, time.Unix(1700000000, 0)))
+	m.indexList.SetItems([]list.Item{
+		indexListItem{par2Filename: "a.par2", dir: "/d", status: index.StatusOK},
+	})
+
+	pressKey(m, "d")
+	require.NotNil(t, m.confirm)
+	assert.Equal(t, confirmCancel, m.confirm.selected)
+
+	// up twice: Отмена → Удалить → Отмена
+	pressKey(m, "up")
+	require.Equal(t, confirmDelete, m.confirm.selected)
+	pressKey(m, "up")
+	require.Equal(t, confirmCancel, m.confirm.selected)
+
+	pressKey(m, "enter")
+
+	// cancelled: the record and the entry are still there
+	desc, err := m.app.store.Get("/d", "a.par2")
+	require.NoError(t, err)
+	assert.NotNil(t, desc)
+	assert.Len(t, m.indexList.Items(), 1)
+
+	// again, this time through "Удалить"
+	pressKey(m, "d")
+	require.NotNil(t, m.confirm)
+	pressKey(m, "down")
+	pressKey(m, "enter")
+
+	assert.Nil(t, m.confirm)
+	desc, err = m.app.store.Get("/d", "a.par2")
+	require.NoError(t, err)
+	assert.Nil(t, desc)
+	assert.Empty(t, m.indexList.Items())
 }
 
 func TestKeys_Enter_OnParent_RestoresCursor(t *testing.T) {

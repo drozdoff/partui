@@ -68,6 +68,10 @@ type Model struct {
 	// indexListExpanded - when true, indexList shows all indexes from DB
 	indexListExpanded bool
 
+	// confirm is the open delete-confirmation dialog, nil while closed.
+	// While open it consumes every key before the lists see any
+	confirm *confirmDialog
+
 	// startupCmd carries the background load of the start directory's
 	// archives into the running program: the model is built before
 	// tea.NewProgram, so Init is the only way to hand the command over

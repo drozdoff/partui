@@ -129,6 +129,11 @@ func (m *Model) View() string {
 // renderBottomPanel renders the statistics panel with an active error line
 // (reported via reportError) shown above it in red
 func (m *Model) renderBottomPanel() string {
+	// the delete confirmation takes the place of the panel while it is open
+	if m.confirm != nil {
+		return m.confirm.View(m.width)
+	}
+
 	panel := m.bottomPanel.View(m.width)
 
 	if m.errText != "" && m.app.now().Before(m.errUntil) {
