@@ -284,14 +284,13 @@ func TestUpdate_Messages_WithoutDB_NoPanic(t *testing.T) {
 		_, _ = m.Update(indexVerifyFinishedMsg{dir: "/tmp/x", par2Filename: "a.txt.par2", status: index.StatusMissing})
 	})
 
-	// degraded mode must be visible in the bottom panel
-	assert.ErrorIs(t, m.bottomPanel.storeErr, ErrStoreUnavailable)
+	// degraded mode must be visible in the header
+	assert.ErrorIs(t, m.header.storeErr, ErrStoreUnavailable)
 }
 
 // Regression: the placeholder added by `c` carries the directory name, and
-// the finished message re-renders its status text from "Processing" to "OK".
-// Both were broken before: the placeholder had no dir (rendering a nameless
-// " | Processing") and the description was computed before the status
+// the finished message recomputes its meta from the new status and the
+// fresh LastVerified. The description used to be computed before the status
 // update, freezing the text on "Processing" forever.
 func TestUpdate_CreateThenFinished_UpdatesStatusText(t *testing.T) {
 	m := newTestModel()
@@ -304,13 +303,15 @@ func TestUpdate_CreateThenFinished_UpdatesStatusText(t *testing.T) {
 	ph := m.indexList.Items()[0].(indexListItem)
 	assert.Equal(t, index.StatusProcessing, ph.status)
 	assert.Equal(t, "/tmp/x", ph.dir)
-	assert.Equal(t, "/tmp/x | Processing", ph.desc)
+	// a fresh placeholder has no verification time: no meta in the
+	// collapsed mode
+	assert.Empty(t, ph.desc)
 
 	_, _ = m.Update(parCreateFinishedMsg{dir: "/tmp/x", title: "a.txt"})
 
 	it := m.indexList.Items()[0].(indexListItem)
 	assert.Equal(t, index.StatusOK, it.status)
-	assert.Equal(t, "/tmp/x | OK", it.desc)
+	assert.Equal(t, "just now", it.desc)
 	m.app.wg.Wait()
 }
 

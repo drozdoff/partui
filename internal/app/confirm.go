@@ -27,6 +27,10 @@ type confirmDialog struct {
 	selected int
 }
 
+// confirmHeight is the rendered height of the dialog: the question, two
+// options and the hint line. footerHeight adds the status line on top of it.
+const confirmHeight = 4
+
 // deleteSelected opens the delete confirmation for the selected index; like
 // verifySelected it requires the index list to have focus, also in the
 // expanded mode. Only the database record is deleted — the .par2 files on
@@ -45,6 +49,9 @@ func (m *Model) deleteSelected() tea.Cmd {
 		return nil
 	}
 	m.confirm = &confirmDialog{item: item, selected: confirmCancel}
+	// the dialog is taller than the key hints it replaces: the lists must
+	// yield the difference
+	m.applyLayout()
 	return nil
 }
 
@@ -62,11 +69,13 @@ func (m *Model) handleKeyConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		d := m.confirm
 		m.confirm = nil
+		m.applyLayout()
 		if d.selected == confirmDelete {
 			return m, m.deleteConfirmed(d.item)
 		}
 	case "esc":
 		m.confirm = nil
+		m.applyLayout()
 	}
 	return m, nil
 }
@@ -95,16 +104,11 @@ func (m *Model) deleteConfirmed(item indexListItem) tea.Cmd {
 	return nil
 }
 
-// View renders the confirmation menu in place of the bottom panel, in the
-// style of the panel it replaces
+// View renders the confirmation menu on the footer context line, in place
+// of the key hints, without any background fill (plan UI_revamp, step UI-3)
 func (d *confirmDialog) View(width int) string {
-	bg := lipgloss.Color("#1a1a1a")
-
-	question := lipgloss.NewStyle().
-		Background(bg).
-		Foreground(lipgloss.Color("#FFFFFF")).
-		Bold(true).
-		Render(fmt.Sprintf("Удалить запись %s? %s", d.item.par2Filename, d.item.dir))
+	question := styleBold.Render(
+		fmt.Sprintf("Удалить запись %s? %s", d.item.par2Filename, d.item.dir))
 
 	options := []struct {
 		action int
@@ -116,20 +120,15 @@ func (d *confirmDialog) View(width int) string {
 	lines := make([]string, 0, len(options)+2)
 	lines = append(lines, question)
 	for _, opt := range options {
-		marker, style := "  ", lipgloss.NewStyle().Background(bg)
+		marker, style := "  ", lipgloss.NewStyle()
 		if d.selected == opt.action {
-			marker, style = "▸ ", style.Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
+			marker, style = "▸ ", style.Bold(true)
 		}
 		lines = append(lines, style.Render(marker+opt.label))
 	}
-	hint := lipgloss.NewStyle().
-		Background(bg).
-		Foreground(lipgloss.Color("#AAAAAA")).
-		Render("↑/↓ выбор · Enter · Esc отмена")
-	lines = append(lines, hint)
+	lines = append(lines, styleDim.Render("↑/↓ выбор · Enter · Esc отмена"))
 
 	return lipgloss.NewStyle().
-		Background(bg).
 		Padding(0, 1).
 		Width(width).
 		Render(lipgloss.JoinVertical(lipgloss.Left, lines...))

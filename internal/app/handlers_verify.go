@@ -47,7 +47,8 @@ func (m *Model) handleVerifyFinished(msg indexVerifyFinishedMsg) tea.Cmd {
 		}
 	})
 
-	// Update bottom panel statistics
+	// Update header statistics; one verification task is finished
+	taskDone(&m.verifying)
 	m.refreshStats()
 
 	return clearCmd

@@ -31,9 +31,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clearErrorMsg:
 		return m, m.handleClearErrorMsg()
 	case spinner.TickMsg:
+		var cmds []tea.Cmd
 		var cmd tea.Cmd
 		m.fileList, cmd = m.fileList.Update(msg)
-		return m, cmd
+		cmds = append(cmds, cmd)
+		// the footer spinner keeps ticking only while tasks are running —
+		// dropping the next tick ends the chain (see Model.spinCmd)
+		m.spinner, cmd = m.spinner.Update(msg)
+		if m.jobsActive() {
+			cmds = append(cmds, cmd)
+		} else {
+			m.spinning = false
+		}
+		return m, tea.Batch(cmds...)
 	}
 
 	return m, nil

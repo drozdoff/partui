@@ -81,7 +81,7 @@ func TestIndexListItemDelegate_Render(t *testing.T) {
 			item := indexListItem{
 				par2Filename: "a.txt.par2",
 				dir:          "/d",
-				desc:         formatIndexItemDesc(indexListItem{dir: "/d", status: tc.status}, false),
+				desc:         "2 h ago",
 				status:       tc.status,
 			}
 			lm := list.New([]list.Item{item}, d, 0, 0)
@@ -109,8 +109,8 @@ func TestItems_ListInterface(t *testing.T) {
 	assert.Equal(t, "7 bytes", fi.Description())
 	assert.Equal(t, "a.txt", fi.FilterValue())
 
-	ii := indexListItem{par2Filename: "a.par2", desc: "/d | OK"}
+	ii := indexListItem{par2Filename: "a.par2", desc: "2 h ago"}
 	assert.Equal(t, "a.par2", ii.Title())
-	assert.Equal(t, "/d | OK", ii.Description())
+	assert.Equal(t, "2 h ago", ii.Description())
 	assert.Equal(t, "a.par2", ii.FilterValue())
 }

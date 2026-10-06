@@ -527,7 +527,7 @@ func TestModel_UpdateIndexItem(t *testing.T) {
 
 	it := m.indexList.Items()[0].(indexListItem)
 	assert.Equal(t, index.StatusOK, it.status)
-	assert.Equal(t, "/d | OK", it.desc)
+	assert.Equal(t, "just now", it.desc)
 
 	assert.False(t, m.updateIndexItem("missing.par2", func(ii *indexListItem) {}))
 }

@@ -135,6 +135,7 @@ func (m *Model) createSelected() tea.Cmd {
 				item.selected = false
 				m.fileList.SetItem(idx, item)
 				m.addIndex(item.title + ".par2")
+				m.creating++
 				m.app.launch(func() {
 					m.app.createParFiles(m.currentDir, item.title, item.size)
 				})
@@ -153,11 +154,12 @@ func (m *Model) createSelected() tea.Cmd {
 		m.fileList.SetItem(m.fileList.Index(), item)
 		m.fileList.CursorDown()
 		m.addIndex(item.title + ".par2")
+		m.creating++
 		m.app.launch(func() {
 			m.app.createParFiles(m.currentDir, item.title, item.size)
 		})
 	}
-	return nil
+	return m.spinCmd()
 }
 
 // openSelected enters the selected directory; when leaving through "../"
@@ -218,7 +220,7 @@ func (m *Model) verifySelected() tea.Cmd {
 		return nil
 	}
 	item.status = index.StatusProcessing
-	item.desc = formatIndexItemDesc(item, m.indexListExpanded)
+	item.desc = formatIndexMeta(item, m.indexListExpanded, m.app.now())
 	m.indexList.SetItem(m.indexList.Index(), item)
 	m.indexList.CursorDown()
 
@@ -228,10 +230,11 @@ func (m *Model) verifySelected() tea.Cmd {
 		m.app.logStoreError("failed to update index status in database", err)
 	}
 	m.refreshStats()
+	m.verifying++
 	m.app.launch(func() {
 		m.app.verifyParFiles(item.dir, item)
 	})
-	return nil
+	return m.spinCmd()
 }
 
 // expandIndexList replaces the index list with all indexes from the database
@@ -261,7 +264,7 @@ func (m *Model) rebuildIndexListAll() {
 			status:       idx.Status,
 			lastVerified: idx.LastVerified,
 		}
-		indexItem.desc = formatIndexItemDesc(indexItem, m.indexListExpanded)
+		indexItem.desc = formatIndexMeta(indexItem, m.indexListExpanded, m.app.now())
 		items[i] = indexItem
 	}
 
@@ -305,7 +308,7 @@ func (m *Model) addIndex(par2Filename string) {
 		dir:          m.currentDir,
 		status:       index.StatusProcessing,
 	}
-	item.desc = formatIndexItemDesc(item, m.indexListExpanded)
+	item.desc = formatIndexMeta(item, m.indexListExpanded, m.app.now())
 	indexItems := m.indexList.Items()
 	m.indexList.SetItems(append(indexItems, item))
 }
@@ -356,7 +359,7 @@ func (m *Model) updateIndexItem(par2Filename string, mutate func(*indexListItem)
 		return false
 	}
 	mutate(&item)
-	item.desc = formatIndexItemDesc(item, m.indexListExpanded)
+	item.desc = formatIndexMeta(item, m.indexListExpanded, m.app.now())
 	m.indexList.SetItem(idx, item)
 	return true
 }

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -102,12 +101,12 @@ func TestModel_DegradedMode_RefreshStats(t *testing.T) {
 	m.app.store = newNoopStore(m.app.logger)
 
 	m.refreshStats()
-	assert.ErrorIs(t, m.bottomPanel.storeErr, ErrStoreUnavailable)
-	assert.Equal(t, 0, m.bottomPanel.totalCount)
-	assert.Equal(t, 0, m.bottomPanel.processingCount)
+	assert.ErrorIs(t, m.header.storeErr, ErrStoreUnavailable)
+	assert.Equal(t, 0, m.header.totalCount)
+	assert.Equal(t, 0, m.header.processingCount)
 }
 
-// Item 3.2: the panel statistics are computed in a single All() pass
+// Item 3.2: the header statistics are computed in a single All() pass
 func TestModel_RefreshStats_CountsStatuses(t *testing.T) {
 	m := newTestModel()
 	fixed := time.Unix(1700000000, 0)
@@ -120,34 +119,43 @@ func TestModel_RefreshStats_CountsStatuses(t *testing.T) {
 
 	m.refreshStats()
 
-	assert.Equal(t, 4, m.bottomPanel.totalCount)
-	assert.Equal(t, 2, m.bottomPanel.processingCount)
-	require.Len(t, m.bottomPanel.damagedItems, 1)
-	assert.Equal(t, "bad.par2", m.bottomPanel.damagedItems[0].par2Filename)
-	assert.Equal(t, "/d", m.bottomPanel.damagedItems[0].dir)
-	assert.NoError(t, m.bottomPanel.storeErr)
+	assert.Equal(t, 4, m.header.totalCount)
+	assert.Equal(t, 2, m.header.processingCount)
+	assert.Equal(t, 1, m.header.okCount)
+	require.Len(t, m.header.damagedItems, 1)
+	assert.Equal(t, "bad.par2", m.header.damagedItems[0].par2Filename)
+	assert.Equal(t, "/d", m.header.damagedItems[0].dir)
+	assert.NoError(t, m.header.storeErr)
 }
 
-func TestBottomPanelView_StoreUnavailable(t *testing.T) {
-	bp := BottomPanel{storeErr: ErrStoreUnavailable}
-	assert.Contains(t, bp.View(80), "DB: недоступна")
+func TestHeaderView_Counters(t *testing.T) {
+	h := Header{totalCount: 3}
+	out := h.counters()
+	assert.Contains(t, out, "3 in index")
+	assert.Contains(t, out, "0 in progress")
+	assert.Contains(t, out, "0 damaged")
 
-	assert.NotContains(t, BottomPanel{}.View(80), "DB: недоступна")
-}
+	// no dividers, no Russian degraded-mode note anywhere
+	assert.NotContains(t, out, "|")
+	assert.NotContains(t, out, "DB:")
 
-func TestBottomPanelView_DamagedList(t *testing.T) {
-	bp := BottomPanel{
-		totalCount: 3,
+	h = Header{
+		totalCount:      3,
+		processingCount: 2,
 		damagedItems: []DamagedIndex{
 			{par2Filename: "a.par2", dir: "/data/movies"},
 			{par2Filename: "b.par2", dir: "/data/books"},
 		},
 	}
-	out := bp.View(200)
-	assert.Contains(t, out, "Total: 3")
-	assert.Contains(t, out, "Damaged:")
-	assert.Contains(t, out, filepath.Join("/data/movies", "a.par2"))
+	out = h.counters()
+	assert.Contains(t, out, "3 in index")
+	assert.Contains(t, out, "2 in progress")
+	assert.Contains(t, out, "2 damaged")
+}
 
-	// a narrow panel truncates the line instead of wrapping
-	assert.Contains(t, bp.View(30), "...")
+func TestHeaderView_StoreUnavailable(t *testing.T) {
+	h := Header{storeErr: ErrStoreUnavailable}
+	assert.Contains(t, h.counters(), "db unavailable")
+
+	assert.NotContains(t, Header{}.counters(), "db unavailable")
 }

@@ -31,8 +31,8 @@ func TestUpdate_ParCreateFinished_UpdatesItems(t *testing.T) {
 
 	iit := m.indexList.Items()[0].(indexListItem)
 	assert.Equal(t, index.StatusOK, iit.status)
-	// the description must show the new status, not a stale "Processing"
-	assert.Equal(t, "/tmp/x | OK", iit.desc)
+	// the meta must show the fresh verification time, not a stale one
+	assert.Equal(t, "just now", iit.desc)
 }
 
 // Regression test: parCreateFinishedMsg must store the index record under

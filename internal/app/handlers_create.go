@@ -35,7 +35,8 @@ func (m *Model) handleParCreateFinished(msg parCreateFinishedMsg) tea.Cmd {
 		ii.lastVerified = m.app.now()
 	})
 
-	// Update bottom panel statistics
+	// Update header statistics; one creation task is finished
+	taskDone(&m.creating)
 	m.refreshStats()
 
 	return nil
@@ -55,7 +56,8 @@ func (m *Model) handleParCreateError(msg parCreateErrorMsg) tea.Cmd {
 		ii.lastVerified = m.app.now()
 	})
 
-	// Update bottom panel statistics
+	// Update header statistics; one creation task is finished
+	taskDone(&m.creating)
 	m.refreshStats()
 
 	return clearCmd

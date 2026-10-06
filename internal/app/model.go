@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -39,25 +40,59 @@ func formatFileSize(bytes uint64) string {
 	}
 }
 
-// formatIndexItemDesc formats the description for an index list item
-func formatIndexItemDesc(item indexListItem, expanded bool) string {
-	status := index.StatusDisplay(item.status)
-
-	if expanded && !item.lastVerified.IsZero() {
-		// Expanded mode: YYYY.MM.DD HH:MM | /path/to/dir | status
-		return item.lastVerified.Format("2006.01.02 15:04") + " | " + item.dir + " | " + status
+// formatIndexMeta builds the dim meta part of an index list row (plan
+// UI_revamp, step UI-4). The collapsed mode shows only the relative
+// verification time — every index of the list lives in the current
+// directory, which is already displayed in the header; the expanded mode
+// prefixes the directory. A zero LastVerified (a fresh placeholder entry)
+// yields no time.
+func formatIndexMeta(item indexListItem, expanded bool, now time.Time) string {
+	var t string
+	if !item.lastVerified.IsZero() {
+		t = formatRelativeTime(item.lastVerified, now)
 	}
-	// Normal mode: /path/to/dir | status
-	return item.dir + " | " + status
+	switch {
+	case t == "":
+		if expanded {
+			return item.dir
+		}
+		return ""
+	case expanded:
+		return item.dir + " · " + t
+	default:
+		return t
+	}
+}
+
+// formatRelativeTime renders t relative to now in compact English
+// ("just now", "5 min ago", "2 h ago", "yesterday", "3 d ago") and falls
+// back to the absolute date for anything older than a week. Abbreviated
+// units keep the format plural-free. A future t (clock skew) is "just now".
+func formatRelativeTime(t, now time.Time) string {
+	d := now.Sub(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%d min ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%d h ago", int(d.Hours()))
+	case d < 48*time.Hour:
+		return "yesterday"
+	case d < 7*24*time.Hour:
+		return fmt.Sprintf("%d d ago", int(d.Hours()/24))
+	default:
+		return t.Format("02.01.2006")
+	}
 }
 
 type Model struct {
 	// app owns the shared dependencies: logger, store, waitgroup, program
 	app *App
 
-	fileList    list.Model
-	indexList   list.Model
-	bottomPanel BottomPanel
+	fileList  list.Model
+	indexList list.Model
+	header    Header
 
 	currentDir    string
 	filesSelected int
@@ -78,9 +113,19 @@ type Model struct {
 	startupCmd tea.Cmd
 
 	// errText/errUntil hold the error reported by App.reportError; the
-	// line is shown in the bottom panel until errUntil
+	// line is shown in the footer status line until errUntil
 	errText  string
 	errUntil time.Time
+
+	// verifying/creating count the launched background PAR2 tasks; the
+	// footer status line renders the spinner and the worker-slot indicator
+	// from them (plan UI_revamp, step UI-5). spinning tracks whether a
+	// spinner tick chain is running, so repeated launches do not stack
+	// chains.
+	verifying int
+	creating  int
+	spinner   spinner.Model
+	spinning  bool
 
 	width  int
 	height int
@@ -88,7 +133,32 @@ type Model struct {
 
 // NewModel creates a Model bound to the given App
 func NewModel(app *App) *Model {
-	return &Model{app: app}
+	return &Model{app: app, spinner: spinner.New(spinner.WithSpinner(spinner.Dot))}
+}
+
+// jobsActive reports whether any background PAR2 task is running
+func (m *Model) jobsActive() bool {
+	return m.verifying > 0 || m.creating > 0
+}
+
+// spinCmd starts the footer spinner tick chain; safe to call on every task
+// launch — an already running chain is left alone
+func (m *Model) spinCmd() tea.Cmd {
+	if m.spinning || !m.jobsActive() {
+		return nil
+	}
+	m.spinning = true
+	return m.spinner.Tick
+}
+
+// taskDone decrements a launched-task counter, flooring at zero: the finish
+// handlers may run without a matching launch (tests, a shutdown while the
+// task was still queued for a worker slot)
+func taskDone(n *int) {
+	*n--
+	if *n < 0 {
+		*n = 0
+	}
 }
 
 // buildModelForDirectory rebuilds the model for the given directory. On
@@ -292,8 +362,8 @@ func (m *Model) processIndexFiles(files []os.DirEntry) indexScan {
 			m.app.logStoreError("failed to check index in database", err)
 		}
 
-		// Format description based on mode
-		indexItem.desc = formatIndexItemDesc(indexItem, m.indexListExpanded)
+		// Format the meta part based on mode
+		indexItem.desc = formatIndexMeta(indexItem, m.indexListExpanded, m.app.now())
 
 		indexItems = append(indexItems, indexItem)
 	}
