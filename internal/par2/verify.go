@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 )
 
 // parSetMeta is everything needed to verify one PAR2 set. partui always
@@ -84,13 +85,19 @@ func parseParSet(indexPath string) (*parSetMeta, error) {
 	return m, nil
 }
 
+// globEscaper keeps the glob metacharacters (\, *, ?, [) of a literal file
+// name out of the volume pattern — gopar globs the raw path and misses the
+// volumes of, e.g., report[1].txt.par2 (plans/utf8_filenames.md §4.4). A
+// lone ] is not a metacharacter, and \ escapes the rest.
+var globEscaper = strings.NewReplacer(`\`, `\\`, `*`, `\*`, `?`, `\?`, `[`, `\[`)
+
 // loadParity globs the parity volumes next to the index file and validates
 // them the way gopar's LoadParityData does. The recovery shard bytes
 // themselves are not needed for verification and are discarded.
 func (m *parSetMeta) loadParity(indexPath string) error {
 	ext := path.Ext(indexPath)
 	base := indexPath[:len(indexPath)-len(ext)]
-	matches, err := filepath.Glob(base + ".*" + ext)
+	matches, err := filepath.Glob(globEscaper.Replace(base) + ".*" + ext)
 	if err != nil {
 		return err
 	}

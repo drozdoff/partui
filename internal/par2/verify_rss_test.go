@@ -1,3 +1,5 @@
+//go:build memory
+
 package par2
 
 // Peak-RSS measurement of the streaming verify (plans/streaming_file.md
@@ -7,13 +9,16 @@ package par2
 // the assertion is peak − baseline: the test binary alone already maps
 // ~75 MiB resident on darwin before doing anything.
 //
+// Excluded from the default `go test ./...` by the `memory` build tag —
+// these tests write ~1 GiB through the real disk per run; run them only on
+// purpose: go test -tags memory -run RSS ./internal/par2/
+//
 // The measurement runs in a helper child process that does nothing but the
 // verify: the fixture lives in the parent, so the child never holds the
 // corpus. That also sidesteps the macOS accounting quirk where madvise-
 // scavenged pages keep counting towards the resident size of the process
-// that freed them. Skipped with -short; the corpus size is controlled with
-// PARTUI_RSS_TEST_BYTES (default 256 MiB, the documented plan measurement
-// used 8 GiB).
+// that freed them. The corpus size is controlled with PARTUI_RSS_TEST_BYTES
+// (default 256 MiB, the documented plan measurement used 8 GiB).
 
 import (
 	"bufio"

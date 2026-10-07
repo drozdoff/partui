@@ -116,6 +116,47 @@ func TestIntegration_CreateVerifyRoundtrip(t *testing.T) {
 	assert.Equal(t, index.StatusOK, desc.Status)
 }
 
+// The ASCII round trip with a non-ASCII name: create, read back with
+// ListPar2Filenames, store the record, verify — all with the exact byte
+// sequence of the name (plans/utf8_filenames.md §5).
+func TestIntegration_CreateVerifyRoundtrip_UTF8(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
+
+	tmp := t.TempDir()
+	app, stop := newIntegrationApp(t, tmp)
+
+	title := "отчёт №5.bin"
+	data := filepath.Join(tmp, title)
+	require.NoError(t, os.WriteFile(data, bytes.Repeat([]byte{'x'}, 64_000), 0o644))
+
+	app.createParFiles(tmp, title, 64_000)
+
+	parPath := data + ".par2"
+	require.FileExists(t, parPath)
+
+	names, err := par2.ListPar2Filenames(parPath)
+	require.NoError(t, err)
+	assert.Contains(t, names, title, "the archive must list the exact name")
+
+	stop()
+
+	desc, err := app.store.Get(tmp, title+".par2")
+	require.NoError(t, err)
+	require.NotNil(t, desc, "the finished message must store the index record")
+	assert.Equal(t, index.StatusOK, desc.Status)
+
+	app.verifyParFiles(tmp, indexListItem{par2Filename: title + ".par2", dir: tmp})
+
+	stop()
+
+	desc, err = app.store.Get(tmp, title+".par2")
+	require.NoError(t, err)
+	require.NotNil(t, desc)
+	assert.Equal(t, index.StatusOK, desc.Status)
+}
+
 // Corrupting the data file must surface as StatusDamaged in the store.
 func TestIntegration_VerifyDamaged(t *testing.T) {
 	if testing.Short() {

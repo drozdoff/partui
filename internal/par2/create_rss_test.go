@@ -1,3 +1,5 @@
+//go:build memory
+
 package par2
 
 // Peak-RSS measurement of the streaming create (plans/streaming_file.md
@@ -9,11 +11,15 @@ package par2
 // binary alone already maps ~75 MiB resident on darwin before doing
 // anything.
 //
+// Excluded from the default `go test ./...` by the `memory` build tag —
+// these tests write ~1 GiB through the real disk per run; run them only on
+// purpose: go test -tags memory -run RSS ./internal/par2/
+//
 // The measurement runs in a helper child process that does nothing but the
 // create: the corpus data file is written by the parent with constant
-// memory. Same scheme as TestVerifyStreamRSS; skipped with -short, the
-// corpus size is controlled with PARTUI_RSS_TEST_BYTES (default 256 MiB,
-// the documented plan measurement used 8 GiB).
+// memory. Same scheme as TestVerifyStreamRSS. The corpus size is controlled
+// with PARTUI_RSS_TEST_BYTES (default 256 MiB, the documented plan
+// measurement used 8 GiB).
 
 import (
 	"bufio"

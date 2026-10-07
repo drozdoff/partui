@@ -292,7 +292,7 @@ func readFileDescriptionPacket(body []byte) (fileID, fileDescriptionPacket, erro
 		return fileID{}, fileDescriptionPacket{}, errors.New("empty files not allowed")
 	}
 
-	filename := decodeNullPaddedASCIIString(filenameBytes)
+	filename := decodeFilenameString(filenameBytes)
 	err = checkFilename(filename)
 	if err != nil {
 		return fileID{}, fileDescriptionPacket{}, err
@@ -742,10 +742,7 @@ func writeFileDescriptionPacket(fileID fileID, packet fileDescriptionPacket) ([]
 		return nil, err
 	}
 
-	filenameBytes, err := encodeASCIIString(packet.filename)
-	if err != nil {
-		return nil, err
-	}
+	filenameBytes := encodeFilenameString(packet.filename)
 
 	byteCount := uint64(packet.byteCount)
 	computedFileID := computeFileID(packet.sixteenKHash, byteCount, filenameBytes)
@@ -807,8 +804,26 @@ func writeRecoveryPacket(exp exponent, data []byte) ([]byte, error) {
 	return append(expBytes[:], data...), nil
 }
 
+// encodeFilenameString encodes a filename as the raw bytes a packet body
+// carries, with no encoding checks. gopar rejected every non-ASCII name
+// here; partui writes the bytes as they come — what par2cmdline does
+// (confirmed experimentally, plans/utf8_filenames.md §2), and the only way
+// a name survives create/verify byte-for-byte.
+func encodeFilenameString(s string) []byte {
+	return []byte(s)
+}
+
+// decodeFilenameString decodes a filename from a packet body: the bytes up
+// to the first null, kept as they are. gopar replaced every non-ASCII byte
+// with U+FFFD, turning a name written by par2cmdline into something that
+// matches nothing on disk (plans/utf8_filenames.md §1.2).
+func decodeFilenameString(bs []byte) string {
+	return string(nullTerminate(bs))
+}
+
 // encodeASCIIString encodes an ASCII string as the raw bytes a packet body
-// carries; non-ASCII names are rejected the way gopar rejects them.
+// carries; non-ASCII characters are rejected. Only used for the creator
+// packet's client ID — filenames go through encodeFilenameString.
 func encodeASCIIString(s string) ([]byte, error) {
 	var bs []byte
 	for _, c := range s {

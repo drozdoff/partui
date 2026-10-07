@@ -104,6 +104,23 @@ func TestProcessIndexFiles_CachedBrokenStaysUnverifiable(t *testing.T) {
 	assert.Contains(t, it.desc, "не удалось прочитать")
 }
 
+// A UTF-8 data file must be marked archived by the exact byte match of the
+// parsed name (plans/utf8_filenames.md §5) — the parse must not transcode
+// the name, or the mark never lands.
+func TestBuildModelForDirectory_UTF8NamesMarkedArchived(t *testing.T) {
+	dir := t.TempDir()
+	writeValidPar2(t, dir, "отчёт №5.bin", []byte("content"))
+
+	m := newTestModel()
+	m.currentDir = dir
+	cmd, err := m.buildModelForDirectory(dir)
+	require.NoError(t, err)
+	require.NotNil(t, cmd)
+	_, _ = m.Update(cmd())
+
+	assert.Equal(t, []string{"отчёт №5.bin"}, m.archived)
+}
+
 // Item 7.2: a fully cached directory produces no background load at all
 func TestBuildModelForDirectory_FullyCachedNoCommand(t *testing.T) {
 	dir := t.TempDir()

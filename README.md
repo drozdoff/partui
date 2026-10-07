@@ -10,6 +10,11 @@ the [gopar](https://github.com/akalin/gopar) library, so the `.par2` files it
 produces and verifies are readable by the standard `par2cmdline` tool — and
 vice versa.
 
+File names are stored and matched byte-for-byte, the way `par2cmdline` does
+it: non-ASCII (UTF-8) names — Cyrillic, CJK, emoji — archive and verify fine.
+A renamed file counts as a different name, including a change of the Unicode
+normalization form (NFC vs NFD), same as with `par2cmdline`.
+
 The screen is split into two panels plus a statistics bar at the bottom:
 
 - **Left — file list**: browse the file system from the directory the binary
@@ -41,7 +46,7 @@ to a read-only warning mode instead.
 |------------------------------|-----------------------------------------------------|
 | `q`, `Ctrl+C`                | Quit partui                                          |
 | `Tab`                        | Switch focus between the file list and the index list |
-| `↑` `↓` `PgUp` `PgDn` `Home` `End` | Move the cursor in the focused list           |
+| `↑` `↓` `PgUp` `PgDn` `Home` `End` | Move the cursor in the focused list; on a list that fits on one page `PgUp` jumps to the first entry and `PgDn` to the last one |
 | `i`                          | Expand the index list to all indexes from the database (full screen) |
 
 ### File list (left panel)

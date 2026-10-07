@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -40,6 +41,10 @@ func pressKey(m *Model, key string) {
 		msg = tea.KeyMsg{Type: tea.KeyUp}
 	case "down":
 		msg = tea.KeyMsg{Type: tea.KeyDown}
+	case "pgup":
+		msg = tea.KeyMsg{Type: tea.KeyPgUp}
+	case "pgdown":
+		msg = tea.KeyMsg{Type: tea.KeyPgDown}
 	default:
 		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
 	}
@@ -508,6 +513,83 @@ func TestKeys_Enter_OnFile_DoesNothing(t *testing.T) {
 	pressKey(m, "enter")
 
 	assert.Equal(t, dir, m.currentDir)
+}
+
+// A one-page list has no page keys in bubbles — pgup/pgdown are disabled
+// there — so pgup jumps to the first entry and pgdown to the last one
+func TestKeys_PgKeys_OnSinglePageList(t *testing.T) {
+	m := newTestModel()
+	items := make([]list.Item, 0, 5)
+	for _, name := range []string{"../", "a.txt", "b.txt", "c.txt", "d.txt"} {
+		items = append(items, fileListItem{title: name})
+	}
+	m.fileList.SetItems(items)
+	m.applyLayout()
+	require.Equal(t, 1, m.fileList.Paginator.TotalPages,
+		"the fixture must fit on one page")
+
+	// pgup from the middle jumps to the first entry
+	m.fileList.Select(2)
+	pressKey(m, "pgup")
+	assert.Equal(t, 0, m.fileList.Index())
+
+	// pgdown jumps to the last entry
+	pressKey(m, "pgdown")
+	assert.Equal(t, 4, m.fileList.Index())
+
+	// pgup at the very top stays
+	pressKey(m, "pgup")
+	assert.Equal(t, 0, m.fileList.Index())
+
+	// pgdown at the last entry stays
+	pressKey(m, "pgdown")
+	assert.Equal(t, 4, m.fileList.Index())
+}
+
+// Regression: the one-page branch of navigateList must swallow only
+// pgup/pgdown — up/down/home/end still reach the list (a previous version
+// dropped them, killing the arrows in every short directory)
+func TestKeys_ArrowsAndHomeEnd_OnSinglePageList(t *testing.T) {
+	m := newTestModel()
+	items := make([]list.Item, 0, 5)
+	for _, name := range []string{"../", "a.txt", "b.txt", "c.txt", "d.txt"} {
+		items = append(items, fileListItem{title: name})
+	}
+	m.fileList.SetItems(items)
+	m.applyLayout()
+	require.Equal(t, 1, m.fileList.Paginator.TotalPages,
+		"the fixture must fit on one page")
+
+	// down moves the cursor, up moves it back
+	pressKey(m, "down")
+	assert.Equal(t, 1, m.fileList.Index())
+	pressKey(m, "up")
+	assert.Equal(t, 0, m.fileList.Index())
+
+	// end jumps to the last entry, home back to the first
+	pressKey(m, "end")
+	assert.Equal(t, 4, m.fileList.Index())
+	pressKey(m, "home")
+	assert.Equal(t, 0, m.fileList.Index())
+}
+
+// A longer list keeps the bubbles behavior: pgup/pgdown turn the pages
+func TestKeys_PgKeys_OnMultiPageList_KeepPaging(t *testing.T) {
+	m := newTestModel()
+	items := make([]list.Item, 0, 64)
+	for i := range 64 {
+		items = append(items, fileListItem{title: fmt.Sprintf("f%02d.txt", i)})
+	}
+	m.fileList.SetItems(items)
+	m.applyLayout()
+	require.Greater(t, m.fileList.Paginator.TotalPages, 1,
+		"the fixture must span several pages")
+
+	pressKey(m, "pgdown")
+	assert.Equal(t, 1, m.fileList.Paginator.Page, "pgdown must turn the page")
+
+	pressKey(m, "pgup")
+	assert.Equal(t, 0, m.fileList.Paginator.Page, "pgup must turn back")
 }
 
 // Item 3.3: updateIndexItem mutates the entry, recomputes the description

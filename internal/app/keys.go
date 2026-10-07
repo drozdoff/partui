@@ -27,9 +27,9 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Navigate the focused list
 		var cmd tea.Cmd
 		if m.focus == FocusFile {
-			m.fileList, cmd = m.fileList.Update(msg)
+			cmd = m.navigateList(&m.fileList, msg)
 		} else {
-			m.indexList, cmd = m.indexList.Update(msg)
+			cmd = m.navigateList(&m.indexList, msg)
 		}
 		return m, cmd
 	case "i":
@@ -47,6 +47,37 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleKeyFile(msg)
 	}
 	return m.handleKeyIndex(msg)
+}
+
+// navigateList routes one navigation key into the focused list. A list that
+// fits on one page has no page keys in bubbles — pgup/pgdown are disabled
+// there (TotalPages == 1) and would be dead — so they are handled here:
+// pgup jumps to the first entry, pgdown to the last one. Every other
+// navigation key — up/down/home/end — keeps the list behavior: on a
+// one-page list those bindings stay enabled in bubbles.
+func (m *Model) navigateList(l *list.Model, msg tea.KeyMsg) tea.Cmd {
+	if l.Paginator.TotalPages > 1 {
+		// list.Model.Update has a value receiver: the updated model comes
+		// back as the result and must be written back (as handleKeyMsg did)
+		updated, cmd := l.Update(msg)
+		*l = updated
+		return cmd
+	}
+	switch msg.String() {
+	case "pgup":
+		if l.Index() > 0 {
+			l.Select(0)
+		}
+		return nil
+	case "pgdown":
+		if n := len(l.Items()); n > 0 && l.Index() < n-1 {
+			l.Select(n - 1)
+		}
+		return nil
+	}
+	updated, cmd := l.Update(msg)
+	*l = updated
+	return cmd
 }
 
 // toggleFocus switches the active list

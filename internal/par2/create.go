@@ -169,12 +169,8 @@ func scanCreateInputs(basePath string, filePaths []string) ([]*createFile, error
 		if relPath[0] == '.' {
 			return nil, errors.New("data files must lie in basePath")
 		}
-		// gopar rejects non-ASCII names when writing the description packet,
-		// after all the data work; checking here just moves the same error
-		// before any output exists.
-		if _, err := encodeASCIIString(relPath); err != nil {
-			return nil, err
-		}
+		// Names are written as-is, byte-for-byte — non-ASCII included; gopar
+		// rejected them here (plans/utf8_filenames.md §4).
 
 		info, err := os.Stat(absPath)
 		if err != nil {
