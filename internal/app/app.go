@@ -126,16 +126,20 @@ func (a *App) logStoreError(msg string, err error) {
 // createParFiles builds a PAR2 archive for a single file in a worker
 // goroutine. It always reports the outcome to the UI — either
 // parCreateFinishedMsg or parCreateErrorMsg — so a file marked as
-// processing never stays in that state (plan item 4.1); the only exception
-// is a shutdown while the task is still queued for a worker slot.
+// processing never stays in that state (plan item 4.1); the only exceptions
+// are a shutdown while the task is still queued for a worker slot and a
+// cancelled context — in both cases the shutdown is not an honest create
+// outcome, so the task exits silently (plans/streaming_file.md §6.6.2,
+// symmetric with verifyParFiles).
 func (a *App) createParFiles(dir string, title string, size uint64) {
 	a.logger.Debug("starting PAR2 creation",
 		slog.String("dir", dir),
 		slog.String("title", title),
 		slog.Uint64("size", size))
 
-	// gopar-period hygiene: hand the freed heap back to the OS right after
-	// the task, so parallel large-file tasks do not stack their RSS peaks
+	// The streaming create is frugal, but hand the freed heap back to the
+	// OS right after the task anyway, so parallel large-file tasks do not
+	// stack their RSS peaks
 	defer debug.FreeOSMemory()
 
 	filePath := filepath.Join(dir, title)
@@ -145,9 +149,21 @@ func (a *App) createParFiles(dir string, title string, size uint64) {
 		SliceByteCount:  par2.CalculateBlockSize(size, uint64(a.cfg.Percentage)),
 		NumParityShards: -1,
 		NumGoroutines:   runtime.GOMAXPROCS(0),
+		Delegate:        createProgressLog{logger: a.logger, par2File: title + ".par2"},
 	}
 
-	err := a.par2.Create(parPath, []string{filePath}, options)
+	err := a.par2.Create(a.ctx, parPath, []string{filePath}, options)
+
+	// A cancellation means the app is shutting down: reporting the create as
+	// failed would be a lie, so the task exits silently, symmetric with the
+	// queued-task case of launch() and with verifyParFiles.
+	if errors.Is(err, context.Canceled) {
+		a.logger.Info("PAR2 creation cancelled",
+			slog.String("dir", dir),
+			slog.String("title", title))
+		return
+	}
+
 	if err != nil {
 		a.logger.Error("PAR2 creation failed",
 			slog.String("dir", dir),

@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,7 +37,7 @@ func benchDirectory(b *testing.B) string {
 			b.Fatal(err)
 		}
 		runner := defaultRunner{}
-		if err := runner.Create(data+".par2", []string{data}, par2.CreateOptions{
+		if err := runner.Create(context.Background(), data+".par2", []string{data}, par2.CreateOptions{
 			SliceByteCount:  par2.CalculateBlockSize(benchFileSize, 5),
 			NumParityShards: -1,
 			NumGoroutines:   1,

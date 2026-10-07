@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -195,7 +196,7 @@ func writeValidPar2(t *testing.T, dir, title string, content []byte) {
 	t.Helper()
 	data := filepath.Join(dir, title)
 	require.NoError(t, os.WriteFile(data, content, 0o644))
-	require.NoError(t, defaultRunner{}.Create(data+".par2", []string{data}, par2.CreateOptions{
+	require.NoError(t, defaultRunner{}.Create(context.Background(), data+".par2", []string{data}, par2.CreateOptions{
 		SliceByteCount:  par2.CalculateBlockSize(uint64(len(content)), 5),
 		NumParityShards: -1,
 		NumGoroutines:   1,

@@ -116,12 +116,13 @@ func (s *fakeStore) Delete(dir, filename string) error {
 func (s *fakeStore) Close() error { return nil }
 
 // fakePar2 records Par2Runner calls; results can be injected per test.
-// The channels let tests wait for a call instead of polling. verifyFunc,
-// when set, replaces the canned response entirely — used to simulate a
-// long verification that observes ctx cancellation.
+// The channels let tests wait for a call instead of polling. verifyFunc and
+// createFunc, when set, replace the canned responses entirely — used to
+// simulate a long operation that observes ctx cancellation.
 type fakePar2 struct {
 	mu         sync.Mutex
 	createErr  error
+	createFunc func(ctx context.Context, parPath string) error
 	verifyRes  par2.VerifyResult
 	verifyErr  error
 	verifyFunc func(ctx context.Context, parPath string) (par2.VerifyResult, error)
@@ -138,11 +139,14 @@ func newFakePar2() *fakePar2 {
 	}
 }
 
-func (f *fakePar2) Create(parPath string, files []string, opts par2.CreateOptions) error {
+func (f *fakePar2) Create(ctx context.Context, parPath string, files []string, opts par2.CreateOptions) error {
 	f.mu.Lock()
 	f.created = append(f.created, parPath)
 	f.mu.Unlock()
 	f.createdCh <- parPath
+	if f.createFunc != nil {
+		return f.createFunc(ctx, parPath)
+	}
 	return f.createErr
 }
 

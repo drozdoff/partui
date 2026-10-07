@@ -5,33 +5,24 @@ import (
 	"log/slog"
 
 	"partui/internal/par2"
-
-	gopar "github.com/akalin/gopar/par2"
 )
 
 // Par2Runner is the interface over PAR2 create/verify operations. It is
 // defined here, at the consumer side, so tests can substitute a fake instead
 // of running the real implementation. The interface carries only partui
-// types — gopar stays an implementation detail of the runner (stage 1 of
-// plans/streaming_file.md).
+// types and contexts — gopar is gone from the runtime entirely (stage 2 of
+// plans/streaming_file.md); it stays a test-only oracle for internal/par2.
 type Par2Runner interface {
-	Create(parPath string, files []string, opts par2.CreateOptions) error
+	Create(ctx context.Context, parPath string, files []string, opts par2.CreateOptions) error
 	Verify(ctx context.Context, parPath string, opts par2.VerifyOptions) (par2.VerifyResult, error)
 }
 
-// defaultRunner is the production runner. Verify is the streaming
-// implementation from internal/par2 (memory O(sliceByteCount), ctx-aware);
-// create still delegates to gopar until the streaming create of stage 2
-// replaces it.
+// defaultRunner is the production runner: both operations are the streaming
+// implementations from internal/par2 (memory O(sliceByteCount), ctx-aware).
 type defaultRunner struct{}
 
-func (defaultRunner) Create(parPath string, files []string, opts par2.CreateOptions) error {
-	return gopar.Create(parPath, files, gopar.CreateOptions{
-		SliceByteCount:  opts.SliceByteCount,
-		NumParityShards: opts.NumParityShards,
-		NumGoroutines:   opts.NumGoroutines,
-		CreateDelegate:  gopar.DoNothingCreateDelegate{},
-	})
+func (defaultRunner) Create(ctx context.Context, parPath string, files []string, opts par2.CreateOptions) error {
+	return par2.CreateStream(ctx, parPath, files, opts)
 }
 
 func (defaultRunner) Verify(ctx context.Context, parPath string, opts par2.VerifyOptions) (par2.VerifyResult, error) {
@@ -56,6 +47,20 @@ type verifyProgressLog struct {
 
 func (l verifyProgressLog) OnProgress(done, total int) {
 	l.logger.Debug("PAR2 verification progress",
+		slog.String("par2_file", l.par2File),
+		slog.Int("done", done),
+		slog.Int("total", total))
+}
+
+// createProgressLog is verifyProgressLog's twin: create progress goes to
+// the Debug log as well (plans/streaming_file.md §6.4).
+type createProgressLog struct {
+	logger   *slog.Logger
+	par2File string
+}
+
+func (l createProgressLog) OnProgress(done, total int) {
+	l.logger.Debug("PAR2 creation progress",
 		slog.String("par2_file", l.par2File),
 		slog.Int("done", done),
 		slog.Int("total", total))

@@ -209,3 +209,66 @@ func TestIntegration_VerifyCancelled(t *testing.T) {
 	assert.Equal(t, index.StatusProcessing, desc.Status,
 		"a cancelled verification must not write a status")
 }
+
+// A cancellation in the middle of a creation must not report a failed
+// create — the worker exits silently, symmetric with the cancelled verify
+// (plans/streaming_file.md §6.6.2). The removal of partial volume files is
+// pinned at the runner level, by TestCreateStream_Cancel.
+func TestIntegration_CreateCancelled(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
+
+	tmp := t.TempDir()
+	app, stop := newIntegrationApp(t, tmp)
+
+	require.NoError(t, app.store.Put(tmp, "a.txt.par2", index.StatusProcessing, app.now()))
+
+	fp := newFakePar2()
+	fp.createFunc = func(ctx context.Context, parPath string) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	app.par2 = fp
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		app.createParFiles(tmp, "a.txt", 1000)
+	}()
+	app.cancel()
+	<-done
+
+	stop()
+
+	desc, err := app.store.Get(tmp, "a.txt.par2")
+	require.NoError(t, err)
+	require.NotNil(t, desc)
+	assert.Equal(t, index.StatusProcessing, desc.Status,
+		"a cancelled creation must not write a status")
+}
+
+// Creating a PAR2 for an empty data file used to panic in gopar's RS coder
+// and take the whole app down (plans/streaming_file.md §6.6.3); the
+// streaming create must surface an ordinary error instead, through the
+// regular failure handler.
+func TestIntegration_CreateEmptyFile(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
+
+	tmp := t.TempDir()
+	app, stop := newIntegrationApp(t, tmp)
+
+	data := writeDataFile(t, tmp, 'x', 0)
+
+	// must not panic; the error goes through handleParCreateError
+	app.createParFiles(tmp, "test.txt", 0)
+
+	stop()
+
+	// the source file survives, no archive appears
+	require.FileExists(t, data)
+	_, statErr := os.Stat(data + ".par2")
+	assert.True(t, os.IsNotExist(statErr), "a failed create must leave no archive")
+}

@@ -36,7 +36,12 @@
 //     "could not read body" instead of panicking inside bytes.Buffer.Next
 //     (gopar panics on lengths that overflow int);
 //   - recovery packet bodies are kept whole instead of being split into
-//     exponent + data — verification never uses the shard bytes.
+//     exponent + data — verification never uses the shard bytes;
+//   - the write side of gopar is vendored alongside the read side
+//     (stage 2): writeNextPacket takes an io.Writer instead of building a
+//     bytes.Buffer per file, so the streaming create writes packets
+//     straight to the output files, and writePacketHeader follows suit;
+//     the per-packet writers and padPacketBytes are verbatim.
 
 package par2
 
@@ -47,6 +52,7 @@ import (
 	"errors"
 	"hash/crc32"
 	"io"
+	"math"
 	"path"
 	"unicode"
 	"unicode/utf8"
@@ -623,4 +629,193 @@ func (w *crc32Window) update(crc uint32, oldLeader, newTrailer byte) uint32 {
 	// Finally, we can precompute the latter two terms and build a
 	// table indexed by a[0], which is precisely crcOldLeaderMasked.
 	return crcExtended ^ crcOldLeaderMasked
+}
+
+// --- packet writers ---------------------------------------------------------
+//
+// Vendored from gopar's write side (packet.go, file.go and the per-packet
+// files) as part of the streaming create (plans/streaming_file.md §6.5).
+// The bodies these functions produce are byte-identical to gopar's; only
+// writeNextPacket's destination changed, as noted in the file header.
+
+// writePacketHeader validates and serializes one packet header. Adapted to
+// take an io.Writer — the streaming create does not buffer whole files.
+func writePacketHeader(w io.Writer, h packetHeader) error {
+	err := checkPacketHeader(h)
+	if err != nil {
+		return err
+	}
+
+	return binary.Write(w, binary.LittleEndian, h)
+}
+
+// padPacketBytes pads a packet body with zeros to a multiple of four, the
+// way gopar's writeFile does before handing a body to writeNextPacket: the
+// padding participates in the packet length and in the packet hash.
+func padPacketBytes(packetBytes []byte) []byte {
+	if len(packetBytes)%4 == 0 {
+		return packetBytes
+	}
+	return append(packetBytes, make([]byte, 4-len(packetBytes)%4)...)
+}
+
+// writeNextPacket writes one packet: header (with the md5 over set ID,
+// packet type and body) followed by the body. The body is expected to be
+// padded already.
+func writeNextPacket(w io.Writer, setID recoverySetID, ptype packetType, body []byte) error {
+	length := uint64(headerSize + len(body))
+	h := packetHeader{
+		Magic:         expectedMagic,
+		Length:        length,
+		Hash:          computePacketHash(setID, ptype, body),
+		RecoverySetID: setID,
+		Type:          ptype,
+	}
+	err := writePacketHeader(w, h)
+	if err != nil {
+		return err
+	}
+
+	_, err = w.Write(body)
+	return err
+}
+
+// writeCreatorPacket serializes the client ID of the creator packet.
+func writeCreatorPacket(clientID string) ([]byte, error) {
+	return encodeASCIIString(clientID)
+}
+
+// writeMainPacket serializes the main packet: slice size, recovery set
+// count, then every file ID of the recovery and the non-recovery set.
+func writeMainPacket(packet mainPacket) ([]byte, error) {
+	if packet.sliceByteCount == 0 || packet.sliceByteCount%4 != 0 {
+		return nil, errors.New("invalid slice byte count")
+	}
+
+	if len(packet.recoverySet) == 0 {
+		return nil, errors.New("empty recovery set")
+	}
+
+	if int64(len(packet.recoverySet)) > int64(math.MaxUint32) {
+		return nil, errors.New("recovery set too big")
+	}
+
+	err := checkFileIDSetsSorted(packet.recoverySet, packet.nonRecoverySet)
+	if err != nil {
+		return nil, err
+	}
+
+	buf := bytes.NewBuffer(nil)
+
+	h := mainPacketHeader{
+		SliceSize:        uint64(packet.sliceByteCount),
+		RecoverySetCount: uint32(len(packet.recoverySet)),
+	}
+
+	err = binary.Write(buf, binary.LittleEndian, h)
+	if err != nil {
+		return nil, err
+	}
+
+	err = binary.Write(buf, binary.LittleEndian, packet.recoverySet)
+	if err != nil {
+		return nil, err
+	}
+
+	err = binary.Write(buf, binary.LittleEndian, packet.nonRecoverySet)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
+// writeFileDescriptionPacket serializes one file description packet; the
+// file ID must match the hash of the sixteenK hash, byte count and filename.
+func writeFileDescriptionPacket(fileID fileID, packet fileDescriptionPacket) ([]byte, error) {
+	if packet.byteCount <= 0 {
+		return nil, errors.New("invalid byte count")
+	}
+
+	err := checkFilename(packet.filename)
+	if err != nil {
+		return nil, err
+	}
+
+	filenameBytes, err := encodeASCIIString(packet.filename)
+	if err != nil {
+		return nil, err
+	}
+
+	byteCount := uint64(packet.byteCount)
+	computedFileID := computeFileID(packet.sixteenKHash, byteCount, filenameBytes)
+	if computedFileID != fileID {
+		return nil, errors.New("file ID mismatch")
+	}
+
+	buf := bytes.NewBuffer(nil)
+
+	h := fileDescriptionPacketHeader{
+		FileID:       fileID,
+		Hash:         packet.hash,
+		SixteenKHash: packet.sixteenKHash,
+		Length:       byteCount,
+	}
+	err = binary.Write(buf, binary.LittleEndian, h)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = buf.Write(filenameBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
+// writeIFSCPacket serializes one input file slice checksum packet.
+func writeIFSCPacket(id fileID, packet ifscPacket) ([]byte, error) {
+	if len(packet.checksumPairs) == 0 {
+		return nil, errors.New("no checksum pairs to write")
+	}
+
+	buf := bytes.NewBuffer(nil)
+
+	err := binary.Write(buf, binary.LittleEndian, id)
+	if err != nil {
+		return nil, err
+	}
+
+	err = binary.Write(buf, binary.LittleEndian, packet.checksumPairs)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
+// writeRecoveryPacket serializes one recovery packet: the exponent as a
+// little-endian uint32 followed by the shard bytes.
+func writeRecoveryPacket(exp exponent, data []byte) ([]byte, error) {
+	if len(data) == 0 || len(data)%4 != 0 {
+		return nil, errors.New("invalid recovery data byte count")
+	}
+
+	var expBytes [4]byte
+	binary.LittleEndian.PutUint32(expBytes[:], uint32(exp))
+	return append(expBytes[:], data...), nil
+}
+
+// encodeASCIIString encodes an ASCII string as the raw bytes a packet body
+// carries; non-ASCII names are rejected the way gopar rejects them.
+func encodeASCIIString(s string) ([]byte, error) {
+	var bs []byte
+	for _, c := range s {
+		if c > unicode.MaxASCII {
+			return nil, errors.New("invalid ASCII character")
+		}
+		bs = append(bs, byte(c))
+	}
+	return bs, nil
 }
