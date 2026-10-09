@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
@@ -71,6 +72,19 @@ func writeDataFile(t *testing.T, dir string, fillByte byte, size int) string {
 	t.Helper()
 	path := filepath.Join(dir, "test.txt")
 	require.NoError(t, os.WriteFile(path, bytes.Repeat([]byte{fillByte}, size), 0o644))
+	return path
+}
+
+// writeVariedDataFile creates a data file of pseudo-random bytes: unlike a
+// constant fill, one flipped byte there makes exactly one slice unusable —
+// identical slices share one checksum pair, so damage in a constant file
+// can hide behind the copies (gopar's "found anywhere" semantics).
+func writeVariedDataFile(t *testing.T, dir string, size int, seed int64) string {
+	t.Helper()
+	bs := make([]byte, size)
+	rand.New(rand.NewSource(seed)).Read(bs)
+	path := filepath.Join(dir, "test.txt")
+	require.NoError(t, os.WriteFile(path, bs, 0o644))
 	return path
 }
 
@@ -312,4 +326,111 @@ func TestIntegration_CreateEmptyFile(t *testing.T) {
 	require.FileExists(t, data)
 	_, statErr := os.Stat(data + ".par2")
 	assert.True(t, os.IsNotExist(statErr), "a failed create must leave no archive")
+}
+
+// The full repair round trip: create, damage one slice, verify → Damaged,
+// repair → OK and the original bytes are back (plans/repair.md §5).
+func TestIntegration_RepairRoundtrip(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
+
+	tmp := t.TempDir()
+	app, stop := newIntegrationApp(t, tmp)
+
+	const size = 64_000
+	data := writeVariedDataFile(t, tmp, size, 42)
+	app.createParFiles(tmp, "test.txt", size)
+	require.FileExists(t, data+".par2")
+
+	original, err := os.ReadFile(data)
+	require.NoError(t, err)
+
+	// flip one byte in the middle: exactly one slice becomes unusable
+	raw, err := os.ReadFile(data)
+	require.NoError(t, err)
+	raw[size/2] ^= 0xFF
+	require.NoError(t, os.WriteFile(data, raw, 0o644))
+
+	// Both tasks report through the same program loop, and the first stop()
+	// ends it — every worker call must happen before the single stop, so
+	// the loop drains all completion messages in order.
+	app.verifyParFiles(tmp, indexListItem{par2Filename: "test.txt.par2", dir: tmp})
+	app.repairParFiles(tmp, indexListItem{par2Filename: "test.txt.par2", dir: tmp})
+	stop()
+
+	repaired, err := os.ReadFile(data)
+	require.NoError(t, err)
+	assert.Equal(t, original, repaired, "the repair must restore the original bytes")
+
+	desc, err := app.store.Get(tmp, "test.txt.par2")
+	require.NoError(t, err)
+	require.NotNil(t, desc)
+	assert.Equal(t, index.StatusOK, desc.Status)
+}
+
+// A repair that cannot help — more damage than parity — keeps the record
+// Damaged and reports the reason through the error line.
+func TestIntegration_RepairNotEnoughParity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
+
+	tmp := t.TempDir()
+	app, stop := newIntegrationApp(t, tmp)
+
+	const size = 64_000
+	data := writeDataFile(t, tmp, 'x', size)
+	app.createParFiles(tmp, "test.txt", size)
+
+	// every slice is gone: far beyond the three parity shards
+	require.NoError(t, os.WriteFile(data, bytes.Repeat([]byte{'y'}, size), 0o644))
+
+	// one stop for both tasks, so both completion messages are drained
+	// (see TestIntegration_RepairRoundtrip)
+	app.verifyParFiles(tmp, indexListItem{par2Filename: "test.txt.par2", dir: tmp})
+	app.repairParFiles(tmp, indexListItem{par2Filename: "test.txt.par2", dir: tmp})
+	stop()
+
+	// the failed repair reports Damaged again — the record ends where the
+	// verification left it
+	desc, err := app.store.Get(tmp, "test.txt.par2")
+	require.NoError(t, err)
+	require.NotNil(t, desc)
+	assert.Equal(t, index.StatusDamaged, desc.Status, "a failed repair must keep the damaged status")
+
+	// the file keeps its damaged content: the repair failed before any
+	// write (the planning happens first)
+	stillDamaged, err := os.ReadFile(data)
+	require.NoError(t, err)
+	assert.Equal(t, bytes.Repeat([]byte{'y'}, size), stillDamaged)
+}
+
+// A repair in a missing directory yields StatusMissing, symmetric with
+// verify.
+func TestIntegration_RepairMissingDir(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
+
+	tmp := t.TempDir()
+	app, stop := newIntegrationApp(t, tmp)
+
+	missing := filepath.Join(tmp, "gone")
+	require.NoError(t, os.Mkdir(missing, 0o755))
+
+	old := time.Now().Add(-24 * time.Hour)
+	require.NoError(t, app.store.Put(missing, "a.par2", index.StatusDamaged, old))
+	require.NoError(t, os.RemoveAll(missing))
+
+	app.repairParFiles(missing, indexListItem{par2Filename: "a.par2", dir: missing})
+
+	stop()
+
+	desc, err := app.store.Get(missing, "a.par2")
+	require.NoError(t, err)
+	require.NotNil(t, desc)
+	assert.Equal(t, index.StatusMissing, desc.Status)
+	assert.WithinDuration(t, old, desc.LastVerified, time.Second,
+		"a missing-directory repair must not touch LastVerified")
 }

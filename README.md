@@ -4,7 +4,9 @@ par2cmdline.
 ## What it does
 
 Partui protects files against corruption and loss by generating PAR2 recovery
-sets for them, and keeps those recovery sets healthy over time. It is built in
+sets for them, and keeps those recovery sets healthy over time: indexes are
+verified on a schedule, and damaged or lost files are repaired from the
+parity volumes with a streaming Reed–Solomon decoder. It is built in
 Go on top of [bubbletea](https://github.com/charmbracelet/bubbletea) and uses
 the [gopar](https://github.com/akalin/gopar) library, so the `.par2` files it
 produces and verifies are readable by the standard `par2cmdline` tool — and
@@ -62,6 +64,7 @@ to a read-only warning mode instead.
 | Key   | Action                                                                         |
 |-------|--------------------------------------------------------------------------------|
 | `v`   | Verify the selected PAR2 index                                                  |
+| `r`   | Repair the selected PAR2 index: damaged or missing files are restored from the parity volumes (a set without damage just gets re-verified) |
 | `d`   | Delete the selected index record — with a confirmation; the `.par2` files on disk are not touched |
 
 ### Expanded index list (full screen)

@@ -27,6 +27,18 @@ type indexVerifyFinishedMsg struct {
 	err          error
 }
 
+// indexRepairFinishedMsg reports the outcome of a repair task. status
+// follows verify's mapping (OK after a successful repair, Missing for a
+// gone directory); a failed repair leaves the index Damaged and carries
+// the reason in err. repaired lists the files the repair rewrote.
+type indexRepairFinishedMsg struct {
+	dir          string
+	par2Filename string
+	status       index.Status
+	repaired     []string
+	err          error
+}
+
 // par2Content is the parse result for one .par2 index file, as reported to
 // the UI by the background load (plan item 7.2)
 type par2Content struct {

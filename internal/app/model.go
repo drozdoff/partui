@@ -117,13 +117,14 @@ type Model struct {
 	errText  string
 	errUntil time.Time
 
-	// verifying/creating count the launched background PAR2 tasks; the
-	// footer status line renders the spinner and the worker-slot indicator
-	// from them (plan UI_revamp, step UI-5). spinning tracks whether a
-	// spinner tick chain is running, so repeated launches do not stack
-	// chains.
+	// verifying/creating/repairing count the launched background PAR2
+	// tasks; the footer status line renders the spinner and the
+	// worker-slot indicator from them (plan UI_revamp, step UI-5). spinning
+	// tracks whether a spinner tick chain is running, so repeated launches
+	// do not stack chains.
 	verifying int
 	creating  int
+	repairing int
 	spinner   spinner.Model
 	spinning  bool
 
@@ -138,7 +139,7 @@ func NewModel(app *App) *Model {
 
 // jobsActive reports whether any background PAR2 task is running
 func (m *Model) jobsActive() bool {
-	return m.verifying > 0 || m.creating > 0
+	return m.verifying > 0 || m.creating > 0 || m.repairing > 0
 }
 
 // spinCmd starts the footer spinner tick chain; safe to call on every task

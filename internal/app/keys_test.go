@@ -220,6 +220,73 @@ func TestKeys_Table(t *testing.T) {
 			},
 		},
 		{
+			name: "r moves the index to processing and writes the status",
+			setup: func(t *testing.T, m *Model) {
+				m.app.cancel()
+				m.focus = FocusIndex
+				require.NoError(t, m.app.store.Put("/d", "a.txt.par2", index.StatusDamaged, fixed))
+				m.indexList.SetItems([]list.Item{
+					indexListItem{par2Filename: "a.txt.par2", dir: "/d", status: index.StatusDamaged},
+				})
+			},
+			key: "r",
+			check: func(t *testing.T, m *Model) {
+				it := m.indexList.Items()[0].(indexListItem)
+				assert.Equal(t, index.StatusProcessing, it.status)
+				assert.Equal(t, 1, m.repairing, "the repair task must be counted")
+
+				desc, err := m.app.store.Get("/d", "a.txt.par2")
+				require.NoError(t, err)
+				require.NotNil(t, desc)
+				assert.Equal(t, index.StatusProcessing, desc.Status)
+				m.app.wg.Wait()
+			},
+		},
+		{
+			name: "r on a processing index is refused",
+			setup: func(t *testing.T, m *Model) {
+				m.focus = FocusIndex
+				m.indexList.SetItems([]list.Item{
+					indexListItem{par2Filename: "a.txt.par2", dir: "/d", status: index.StatusProcessing},
+				})
+			},
+			key: "r",
+			check: func(t *testing.T, m *Model) {
+				assert.Equal(t, 0, m.repairing, "no second task may overlap the running one")
+			},
+		},
+		{
+			name: "r is ignored while the file list has focus",
+			setup: func(t *testing.T, m *Model) {
+				m.focus = FocusFile
+				m.indexList.SetItems([]list.Item{
+					indexListItem{par2Filename: "a.txt.par2", dir: "/d", status: index.StatusDamaged},
+				})
+			},
+			key: "r",
+			check: func(t *testing.T, m *Model) {
+				assert.Equal(t, 0, m.repairing)
+			},
+		},
+		{
+			name: "r in the expanded list repairs the selected index",
+			setup: func(t *testing.T, m *Model) {
+				m.app.cancel()
+				m.indexListExpanded = true
+				m.focus = FocusIndex
+				require.NoError(t, m.app.store.Put("/d", "a.txt.par2", index.StatusDamaged, fixed))
+				m.indexList.SetItems([]list.Item{
+					indexListItem{par2Filename: "a.txt.par2", dir: "/d", status: index.StatusDamaged},
+				})
+			},
+			key: "r",
+			check: func(t *testing.T, m *Model) {
+				it := m.indexList.Items()[0].(indexListItem)
+				assert.Equal(t, index.StatusProcessing, it.status)
+				m.app.wg.Wait()
+			},
+		},
+		{
 			name: "enter on a directory rebuilds the model",
 			setup: func(t *testing.T, m *Model) {
 				m.currentDir = keyDir(t)

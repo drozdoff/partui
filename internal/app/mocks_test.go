@@ -116,8 +116,8 @@ func (s *fakeStore) Delete(dir, filename string) error {
 func (s *fakeStore) Close() error { return nil }
 
 // fakePar2 records Par2Runner calls; results can be injected per test.
-// The channels let tests wait for a call instead of polling. verifyFunc and
-// createFunc, when set, replace the canned responses entirely — used to
+// The channels let tests wait for a call instead of polling. The *Func
+// fields, when set, replace the canned responses entirely — used to
 // simulate a long operation that observes ctx cancellation.
 type fakePar2 struct {
 	mu         sync.Mutex
@@ -126,16 +126,22 @@ type fakePar2 struct {
 	verifyRes  par2.VerifyResult
 	verifyErr  error
 	verifyFunc func(ctx context.Context, parPath string) (par2.VerifyResult, error)
+	repairRes  par2.RepairResult
+	repairErr  error
+	repairFunc func(ctx context.Context, parPath string) (par2.RepairResult, error)
 	created    []string // par paths passed to Create
 	verified   []string // par paths passed to Verify
+	repaired   []string // par paths passed to Repair
 	createdCh  chan string
 	verifiedCh chan string
+	repairedCh chan string
 }
 
 func newFakePar2() *fakePar2 {
 	return &fakePar2{
 		createdCh:  make(chan string, 8),
 		verifiedCh: make(chan string, 8),
+		repairedCh: make(chan string, 8),
 	}
 }
 
@@ -159,4 +165,15 @@ func (f *fakePar2) Verify(ctx context.Context, parPath string, opts par2.VerifyO
 		return f.verifyFunc(ctx, parPath)
 	}
 	return f.verifyRes, f.verifyErr
+}
+
+func (f *fakePar2) Repair(ctx context.Context, parPath string, opts par2.RepairOptions) (par2.RepairResult, error) {
+	f.mu.Lock()
+	f.repaired = append(f.repaired, parPath)
+	f.mu.Unlock()
+	f.repairedCh <- parPath
+	if f.repairFunc != nil {
+		return f.repairFunc(ctx, parPath)
+	}
+	return f.repairRes, f.repairErr
 }

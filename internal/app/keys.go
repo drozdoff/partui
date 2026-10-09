@@ -108,6 +108,8 @@ func (m *Model) handleKeyIndex(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "v":
 		return m, m.verifySelected()
+	case "r":
+		return m, m.repairSelected()
 	case "d":
 		return m, m.deleteSelected()
 	}
@@ -122,6 +124,8 @@ func (m *Model) handleKeyExpanded(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.collapseIndexList()
 	case "v":
 		return m, m.verifySelected()
+	case "r":
+		return m, m.repairSelected()
 	case "d":
 		return m, m.deleteSelected()
 	}
@@ -264,6 +268,51 @@ func (m *Model) verifySelected() tea.Cmd {
 	m.verifying++
 	m.app.launch(func() {
 		m.app.verifyParFiles(item.dir, item)
+	})
+	return m.spinCmd()
+}
+
+// repairSelected starts a repair of the selected index; like verifySelected
+// it requires the index list to have focus, also in the expanded mode. A
+// set without damage comes back as a no-op repair, so the key doubles as a
+// verify-and-fix: the scan runs first either way (plans/repair.md §4).
+func (m *Model) repairSelected() tea.Cmd {
+	if m.focus != FocusIndex {
+		return nil
+	}
+	item, ok := selectedIndexChanged(m)
+	if !ok {
+		return nil
+	}
+	// only .par2 files can be repaired; the expanded list may still
+	// contain legacy records stored under source file names. Defensive
+	// check: startup cleanup removes such records, so the branch is next
+	// to unreachable; the item is left untouched, a log entry is enough
+	if !isPar2Name(item.par2Filename) {
+		m.app.logger.Warn("refusing to repair a record without .par2 extension",
+			slog.String("dir", item.dir),
+			slog.String("par2_file", item.par2Filename))
+		return nil
+	}
+	// a repair rewrites data files; overlapping it with a running verify
+	// (or another repair) of the same set would race on them
+	if item.status == index.StatusProcessing {
+		return nil
+	}
+	item.status = index.StatusProcessing
+	item.desc = formatIndexMeta(item, m.indexListExpanded, m.app.now())
+	m.indexList.SetItem(m.indexList.Index(), item)
+	m.indexList.CursorDown()
+
+	// Ignored-with-log level: the item is already shown as processing and
+	// the repair result overwrites the status anyway
+	if err := m.app.store.UpdateStatus(item.dir, item.par2Filename, index.StatusProcessing); err != nil {
+		m.app.logStoreError("failed to update index status in database", err)
+	}
+	m.refreshStats()
+	m.repairing++
+	m.app.launch(func() {
+		m.app.repairParFiles(item.dir, item)
 	})
 	return m.spinCmd()
 }

@@ -32,6 +32,10 @@ type parSetMeta struct {
 	// parityExponents is the number of recovery shards present across all
 	// volumes: the highest exponent seen plus one, nil gaps included.
 	parityExponents int
+	// parityVolumes maps every present exponent to the volume file whose
+	// recovery packet carries its shard. Only the repair reads it (the
+	// shard bytes themselves are still discarded here).
+	parityVolumes map[exponent]string
 }
 
 // parseParSet reads the index file and collects the metadata needed for
@@ -103,6 +107,7 @@ func (m *parSetMeta) loadParity(indexPath string) error {
 	}
 
 	maxExponent := -1
+	volumes := make(map[exponent]string)
 	for _, match := range matches {
 		volumeBytes, err := os.ReadFile(match)
 		if err != nil {
@@ -140,10 +145,14 @@ func (m *parSetMeta) loadParity(indexPath string) error {
 			if int(exp) > maxExponent {
 				maxExponent = int(exp)
 			}
+			// The duplicate-exponent check in readPackets guarantees the
+			// shard bytes agree, so any volume carrying the exponent will do.
+			volumes[exp] = match
 		}
 	}
 
 	m.parityExponents = maxExponent + 1
+	m.parityVolumes = volumes
 	return nil
 }
 
@@ -230,20 +239,32 @@ func (cm checksumMap) byCRC(crc uint32) map[[md5.Size]byte][]shardRef {
 	return cm[crc]
 }
 
+// sliceLoc is where the bytes of an expected slice were found during the
+// scan: the recovery-set file (its index) and the window offset of the hit.
+// The window may reach past the file's end — the last slice is matched in
+// its zero-padded form — so readers must zero-pad likewise.
+type sliceLoc struct {
+	file int
+	off  int64
+}
+
 // scanState tracks which expected slices have been found so far — one bool
 // per expected slice of every recovery-set file. A hit in one file can mark
 // slices of any file (the map is global), mirroring gopar's "usable ⇔ the
-// pair was found anywhere in the set".
+// pair was found anywhere in the set". For repair, every found slice also
+// records where its bytes live (loc); verification ignores that.
 type scanState struct {
 	found [][]bool
+	loc   [][]sliceLoc
 	done  int // progress counter: resolved expected slices
 	total int
 }
 
 func newScanState(m *parSetMeta) *scanState {
-	st := &scanState{found: make([][]bool, len(m.recoverySet))}
+	st := &scanState{found: make([][]bool, len(m.recoverySet)), loc: make([][]sliceLoc, len(m.recoverySet))}
 	for i, id := range m.recoverySet {
 		st.found[i] = make([]bool, len(m.ifsc[id]))
+		st.loc[i] = make([]sliceLoc, len(m.ifsc[id]))
 		st.total += len(st.found[i])
 	}
 	return st
@@ -252,10 +273,17 @@ func newScanState(m *parSetMeta) *scanState {
 // mark records that the expected slice ref was found somewhere; it reports
 // whether this was the first time (i.e. progress advanced).
 func (st *scanState) mark(ref shardRef) bool {
+	return st.markAt(ref, sliceLoc{})
+}
+
+// markAt is mark with the location the bytes were found at; like found,
+// the first location wins.
+func (st *scanState) markAt(ref shardRef, loc sliceLoc) bool {
 	if st.found[ref.fileIdx][ref.sliceIdx] {
 		return false
 	}
 	st.found[ref.fileIdx][ref.sliceIdx] = true
+	st.loc[ref.fileIdx][ref.sliceIdx] = loc
 	st.done++
 	return true
 }
@@ -354,7 +382,7 @@ const hashFeedChunk = 32 << 10
 // to some expected slice). The md5 of the whole file and the sixteenK hash
 // are computed over the actual bytes on the way. Memory: one window plus
 // small buffers, independent of the file size.
-func scanFile(ctx context.Context, p string, id fileID, m *parSetMeta, cm checksumMap, st *scanState, onProgress func()) (scanOutcome, error) {
+func scanFile(ctx context.Context, p string, fileIdx int, id fileID, m *parSetMeta, cm checksumMap, st *scanState, onProgress func()) (scanOutcome, error) {
 	var out scanOutcome
 
 	f, err := os.Open(p)
@@ -427,7 +455,7 @@ func scanFile(ctx context.Context, p string, id fileID, m *parSetMeta, cm checks
 			}
 			if refs := byHash[md5.Sum(win)]; len(refs) > 0 {
 				for _, ref := range refs {
-					st.mark(ref)
+					st.markAt(ref, sliceLoc{file: fileIdx, off: j})
 				}
 				justMissed = false
 				j += n
@@ -488,40 +516,9 @@ func VerifyStream(ctx context.Context, indexPath string, dg VerifyDelegate) ([]F
 		return nil, err
 	}
 
-	st := newScanState(meta)
-	cm := newChecksumMap(meta)
-	if dg == nil {
-		dg = doNothingVerifyDelegate{}
-	}
-	report := func() {
-		done, total := st.progress()
-		dg.OnProgress(done, total)
-	}
-
-	baseDir := filepath.Dir(indexPath)
-	results := make([]FileResult, len(meta.recoverySet))
-	for i, id := range meta.recoverySet {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-
-		p := filepath.Join(baseDir, meta.descriptions[id].filename)
-		out, err := scanFile(ctx, p, id, meta, cm, st, report)
-		if err != nil {
-			return nil, err
-		}
-		results[i] = FileResult{
-			Path:           p,
-			Missing:        out.missing,
-			HashMismatch:   out.hashMismatch,
-			WrongByteCount: out.wrongByteCount,
-		}
-		if out.missing {
-			// A missing file resolves none of its slices by scanning;
-			// count them as accounted for in the progress.
-			st.done += len(st.found[i])
-			report()
-		}
+	st, outcomes, err := scanDataSet(ctx, meta, filepath.Dir(indexPath), dg)
+	if err != nil {
+		return nil, err
 	}
 
 	// gopar order: data files first, parity volumes afterwards — a corrupt
@@ -530,14 +527,63 @@ func VerifyStream(ctx context.Context, indexPath string, dg VerifyDelegate) ([]F
 		return nil, err
 	}
 
+	baseDir := filepath.Dir(indexPath)
+	results := make([]FileResult, len(meta.recoverySet))
 	for i := range results {
-		results[i].UsableShards = st.foundCount(i)
-		results[i].UnusableShards = len(st.found[i]) - results[i].UsableShards
-		results[i].RepairNeeded = results[i].UnusableShards > 0
+		usable := st.foundCount(i)
+		results[i] = FileResult{
+			Path:           filepath.Join(baseDir, meta.descriptions[meta.recoverySet[i]].filename),
+			Missing:        outcomes[i].missing,
+			HashMismatch:   outcomes[i].hashMismatch,
+			WrongByteCount: outcomes[i].wrongByteCount,
+			UsableShards:   usable,
+			UnusableShards: len(st.found[i]) - usable,
+			RepairNeeded:   len(st.found[i]) > usable,
+		}
 	}
-	report()
+	if dg != nil {
+		done, total := st.progress()
+		dg.OnProgress(done, total)
+	}
 
 	return results, nil
+}
+
+// scanDataSet streams every data file of the set through the checksum map —
+// the scan phase shared by VerifyStream and RepairStream (plans/repair.md).
+// basePath is the directory holding the data files. A nil delegate disables
+// progress reporting.
+func scanDataSet(ctx context.Context, meta *parSetMeta, basePath string, dg VerifyDelegate) (*scanState, []scanOutcome, error) {
+	st := newScanState(meta)
+	cm := newChecksumMap(meta)
+	report := func() {
+		if dg == nil {
+			return
+		}
+		done, total := st.progress()
+		dg.OnProgress(done, total)
+	}
+
+	outcomes := make([]scanOutcome, len(meta.recoverySet))
+	for i, id := range meta.recoverySet {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+
+		p := filepath.Join(basePath, meta.descriptions[id].filename)
+		out, err := scanFile(ctx, p, i, id, meta, cm, st, report)
+		if err != nil {
+			return nil, nil, err
+		}
+		outcomes[i] = out
+		if out.missing {
+			// A missing file resolves none of its slices by scanning;
+			// count them as accounted for in the progress.
+			st.done += len(st.found[i])
+			report()
+		}
+	}
+	return st, outcomes, nil
 }
 
 type doNothingVerifyDelegate struct{}

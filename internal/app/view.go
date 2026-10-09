@@ -218,9 +218,9 @@ func (m *Model) contextLine() string {
 func (m *Model) helpLine() string {
 	switch {
 	case m.indexListExpanded:
-		return styleDim.Render("esc back · v verify · d delete · q quit")
+		return styleDim.Render("esc back · v verify · r repair · d delete · q quit")
 	case m.focus == FocusIndex:
-		return styleDim.Render("tab files · v verify · d delete · q quit")
+		return styleDim.Render("tab files · v verify · r repair · d delete · q quit")
 	default:
 		return styleDim.Render("tab indexes · space select · c create · enter open · q quit")
 	}
@@ -245,10 +245,12 @@ func (m *Model) statusLine() string {
 func (m *Model) activityLine() string {
 	label := "working"
 	switch {
-	case m.creating == 0:
+	case m.creating == 0 && m.repairing == 0:
 		label = "verifying"
-	case m.verifying == 0:
+	case m.verifying == 0 && m.repairing == 0:
 		label = "creating"
+	case m.verifying == 0 && m.creating == 0:
+		label = "repairing"
 	}
 	return m.spinner.View() + " " + styleWork.Render(label) + "  " + m.slotIndicator()
 }
@@ -258,7 +260,7 @@ func (m *Model) activityLine() string {
 // count simply caps at the slot count. Without a configured limit the
 // indicator falls back to one cell per running task.
 func (m *Model) slotIndicator() string {
-	busy := m.verifying + m.creating
+	busy := m.verifying + m.creating + m.repairing
 	slots := m.app.cfg.MaxWorkers
 	if slots <= 0 {
 		slots = busy

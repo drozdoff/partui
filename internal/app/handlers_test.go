@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"partui/internal/index"
+	"partui/internal/par2"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/stretchr/testify/assert"
@@ -144,4 +145,68 @@ func TestUpdate_VerifyFinished_ErrorShown(t *testing.T) {
 
 	assert.Contains(t, m.errText, "PAR2 verification failed")
 	assert.Contains(t, m.errText, "unexpected EOF")
+}
+
+// A successful repair is an OK with a fresh LastVerified: the repair
+// re-verified every file of the set against its description hashes.
+func TestUpdate_RepairFinished_OK(t *testing.T) {
+	fixed := time.Unix(1700000000, 0)
+	m := newTestModel()
+	m.app.clock = func() time.Time { return fixed }
+	m.currentDir = "/tmp/x"
+
+	old := fixed.Add(-24 * time.Hour)
+	require.NoError(t, m.app.store.Put("/tmp/x", "a.par2", index.StatusDamaged, old))
+	m.indexList.SetItems([]list.Item{
+		indexListItem{par2Filename: "a.par2", dir: "/tmp/x", status: index.StatusDamaged, lastVerified: old},
+	})
+
+	_, _ = m.Update(indexRepairFinishedMsg{
+		dir:          "/tmp/x",
+		par2Filename: "a.par2",
+		status:       index.StatusOK,
+		repaired:     []string{"/tmp/x/a.dat"},
+	})
+
+	desc, err := m.app.store.Get("/tmp/x", "a.par2")
+	require.NoError(t, err)
+	require.NotNil(t, desc)
+	assert.Equal(t, index.StatusOK, desc.Status)
+	assert.WithinDuration(t, fixed, desc.LastVerified, time.Second, "the repair re-verified the set")
+
+	it := m.indexList.Items()[0].(indexListItem)
+	assert.Equal(t, index.StatusOK, it.status)
+	assert.Empty(t, m.errText)
+}
+
+// A failed repair keeps the record Damaged — the damaged count of the
+// header must keep reflecting the disk — and surfaces the reason.
+func TestUpdate_RepairFinished_FailureStaysDamaged(t *testing.T) {
+	fixed := time.Unix(1700000000, 0)
+	m := newTestModel()
+	m.app.clock = func() time.Time { return fixed }
+	m.currentDir = "/tmp/x"
+
+	old := fixed.Add(-24 * time.Hour)
+	require.NoError(t, m.app.store.Put("/tmp/x", "a.par2", index.StatusDamaged, old))
+	m.indexList.SetItems([]list.Item{
+		indexListItem{par2Filename: "a.par2", dir: "/tmp/x", status: index.StatusDamaged, lastVerified: old},
+	})
+
+	_, _ = m.Update(indexRepairFinishedMsg{
+		dir:          "/tmp/x",
+		par2Filename: "a.par2",
+		status:       index.StatusDamaged,
+		err:          par2.ErrNotEnoughParity,
+	})
+
+	desc, err := m.app.store.Get("/tmp/x", "a.par2")
+	require.NoError(t, err)
+	require.NotNil(t, desc)
+	assert.Equal(t, index.StatusDamaged, desc.Status)
+
+	it := m.indexList.Items()[0].(indexListItem)
+	assert.Equal(t, index.StatusDamaged, it.status)
+	assert.Contains(t, m.errText, "PAR2 repair failed")
+	assert.Contains(t, m.errText, "not enough parity shards")
 }

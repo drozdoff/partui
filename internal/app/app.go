@@ -259,3 +259,76 @@ func (a *App) verifyParFiles(dir string, item indexListItem) {
 
 	a.program.Send(msg)
 }
+
+// repairParFiles repairs the set of a single index in a worker goroutine and
+// reports the outcome as indexRepairFinishedMsg — OK when the set came back
+// whole ( Damaged stays Damaged when the repair failed: the reason is in
+// the message and the log, but the damaged count of the header must not
+// drop — plans/repair.md §4). A shutdown while the task is queued and a
+// cancelled context exit silently, symmetric with verifyParFiles.
+func (a *App) repairParFiles(dir string, item indexListItem) {
+	a.logger.Debug("starting PAR2 repair",
+		slog.String("dir", dir),
+		slog.String("par2_file", item.par2Filename))
+
+	// The streaming repair is frugal, but hand the freed heap back to the
+	// OS right after the task anyway, like create and verify do.
+	defer debug.FreeOSMemory()
+
+	// Check if directory exists before attempting repair; the missing-dir
+	// handling matches verifyParFiles — common for offline/removable media.
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		a.logger.Warn("directory not found, marking as missing",
+			slog.String("dir", dir),
+			slog.String("par2_file", item.par2Filename))
+
+		a.program.Send(indexRepairFinishedMsg{
+			dir:          dir,
+			par2Filename: item.par2Filename,
+			status:       index.StatusMissing,
+		})
+		return
+	}
+
+	parPath := filepath.Join(dir, item.par2Filename)
+	options := par2.RepairOptions{
+		Delegate: repairProgressLog{logger: a.logger, par2File: item.par2Filename},
+	}
+	res, err := a.par2.Repair(a.ctx, parPath, options)
+
+	// A cancellation means the app is shutting down: reporting the repair as
+	// failed would be a lie, so the task exits silently, symmetric with
+	// verifyParFiles.
+	if errors.Is(err, context.Canceled) {
+		a.logger.Info("PAR2 repair cancelled",
+			slog.String("dir", dir),
+			slog.String("par2_file", item.par2Filename))
+		return
+	}
+
+	msg := indexRepairFinishedMsg{
+		dir:          dir,
+		par2Filename: item.par2Filename,
+		status:       index.StatusOK,
+	}
+
+	if err != nil {
+		a.logger.Error("PAR2 repair failed",
+			slog.String("dir", dir),
+			slog.String("par2_file", item.par2Filename),
+			slog.String("error", err.Error()))
+		// The set stays Damaged: the header's damaged count must keep
+		// reflecting the state on disk, only the reason is reported.
+		msg.status = index.StatusDamaged
+		msg.err = err
+	} else {
+		msg.repaired = res.RepairedFiles
+		a.logger.Info("PAR2 repair finished",
+			slog.String("dir", dir),
+			slog.String("par2_file", item.par2Filename),
+			slog.Int("repaired_files", len(res.RepairedFiles)),
+			slog.Bool("repair_needed", res.RepairNeeded))
+	}
+
+	a.program.Send(msg)
+}
