@@ -126,3 +126,9 @@ Environment variables override the file values:
 | `PARTUI_SHOW_HIDDEN` | `true` / `false`              |
 | `PARTUI_LOG_LEVEL`   | `debug` / `info` / `warn` / `error` |
 | `PARTUI_LOG_FILE`    | path (`~` expands to home)    |
+
+## License
+
+Partui is licensed under the [MIT License](LICENSE). It contains code from
+[gopar](https://github.com/akalin/gopar) (BSD 3-Clause, © 2017 Frederick
+Akalin) — see [NOTICE](NOTICE).
